@@ -20,19 +20,59 @@ class FeatureNetwork(torch.nn.Module):
         return self.features(x)
 
 class RPN(torch.nn.Module):
-    def __init__(self):
+    def __init__(self,threshold:float=0.5,N:int=50,iou_threshold:float=0.6):
         super(RPN,self).__init__()
-        self.anchor_ratios = torch.tensor([[1,1]],dtype=torch.float32)
-        self.anchor_scales = torch.tensor([128],dtype=torch.float32)
+        anchor_ratios = torch.tensor([[1,1]],dtype=torch.float32)
+        anchor_scales = [64,128]
+        self.anchors = torch.cat(
+            [
+                anchor_ratios*anchor_scale 
+                for anchor_scale in anchor_scales
+            ],
+            dim=0
+        )
+        self.anchor_size = self.anchors.size()[0]
+        
+        
+        self.threshold = threshold#torch.tensor([threshold],dtype=torch.float32)
+        self._N = N
+        self.iou_threshold = iou_threshold
 
-        self.conv1 = torch.nn.Conv2d(in_channels=256,out_channels=1,kernel_size=3,stride=1,padding=1)
-        self.conv2_cls = torch.nn.Conv2d(in_channels=1,out_channels=2,kernel_size=1,stride=1)
-        self.conv2_reg = torch.nn.Conv2d(in_channels=1,out_channels=4,kernel_size=1,stride=1)
+        self.conv1 = torch.nn.Conv2d(
+            in_channels=256,out_channels=256,
+            kernel_size=3,stride=1,padding=1)
+        
+        self.conv2_cls = torch.nn.Conv2d(
+            in_channels=256,out_channels=2*self.anchor_size,
+            kernel_size=1,stride=1)
+        
+        self.conv2_reg = torch.nn.Conv2d(
+            in_channels=256,out_channels=4*self.anchor_size,
+            kernel_size=1,stride=1)
 
     def forward(self,x):
         x = self.conv1(x)
-        return self.conv2_cls(x),self.conv2_reg(x)
+        cls,reg = self.conv2_cls(x),self.conv2_reg(x)
+        ch,cw = cls.size()[-2:]
 
+        # batch_size,k*2,ch,cw => 
+        # batch_size,k,2,ch,cw => 
+        # batch_size,k,ch,cw,2 => batch_size,k*ch*cw,2
+        cls = cls.view(-1,self.anchor_size,2,ch,cw)\
+            .permute(0,1,3,4,2)\
+                .reshape(-1,ch*cw*self.anchor_size,2)
+        
+        # batch_size,k*4,ch,cw => 
+        # batch_size,k,4,ch,cw => 
+        # batch_size,k,ch,cw,4 => batch_size,k*ch*cw,4
+        reg = reg.view(-1,self.anchor_size,4,ch,cw)\
+            .permute(0,1,3,4,2)\
+                .reshape(-1,ch*cw*self.anchor_size,4)
+        
+        for reg,score in zip(reg,cls[:,:,1]): # for every batch, apply NMS
+            bboxes = reg*
+        
+        return cls,reg
 
 
 if __name__ == '__main__':
