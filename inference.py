@@ -20,7 +20,7 @@ class FeatureNetwork(torch.nn.Module):
         return self.features(x)
 
 class RPN(torch.nn.Module):
-    def __init__(self,threshold:float=0.5,N:int=50,iou_threshold:float=0.6):
+    def __init__(self,threshold:float=0.4,N:int=50,iou_threshold:float=0.6):
         super(RPN,self).__init__()
         anchor_ratios = torch.tensor([[1,1]],dtype=torch.float32)
         anchor_scales = [64,128]
@@ -57,19 +57,22 @@ class RPN(torch.nn.Module):
         cls,reg = self.conv2_cls(x),self.conv2_reg(x)
         ch,cw = cls.size()[-2:]
 
-        # batch_size,k*2,ch,cw => 
-        # batch_size,k,2,ch,cw => 
-        # batch_size,k,ch,cw,2 => batch_size,k*ch*cw,2
-        cls = cls.view(-1,self.anchor_size,2,ch,cw)\
-            .permute(0,1,3,4,2)\
-                .reshape(-1,ch*cw*self.anchor_size,2)
+        # batch,k*2,ch,cw => batch,k,2,ch,cw => batch,k,ch,cw,2
+        cls = cls.view(-1,self.anchor_size,2,ch,cw).permute(0,1,3,4,2)
+        b,a,y,x = torch.where(cls[:,:,:,:,1]>self.threshold)
         
-        # batch_size,k*4,ch,cw => 
-        # batch_size,k,4,ch,cw => 
-        # batch_size,k,ch,cw,4 => batch_size,k*ch*cw,4
-        reg = reg.view(-1,self.anchor_size,4,ch,cw)\
-            .permute(0,1,3,4,2)\
-                .reshape(-1,ch*cw*self.anchor_size,4)
+        # batch,k*4,ch,cw => batch,k,4,ch,cw => batch,k,ch,cw,4
+        reg = reg.view(-1,self.anchor_size,4,ch,cw).permute(0,1,3,4,2)
+        
+        # filter preds using threshold
+        reg = reg[b,a,y,x,:]
+        cls = cls[b,a,y,x,1]
+        print(a)
+        selected_anchors = self.anchors[a]
+        print("anchors: ",selected_anchors)
+        print("anchors shape: ",selected_anchors.size())
+        print("regression result: ",reg.size())
+        print("classification result: ",cls.size())
         """
         for reg,score in zip(reg,cls[:,:,1]): # for every batch, apply NMS
             bboxes = reg*
@@ -80,7 +83,7 @@ class RPN(torch.nn.Module):
 if __name__ == '__main__':
     import cv2,sys
     img = cv2.cvtColor(cv2.imread(sys.argv[1]),cv2.COLOR_BGR2RGB)
-    
+    print(img.shape)
     img = preprocess(img)
     fe = FeatureNetwork()
     
