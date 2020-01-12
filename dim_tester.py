@@ -1,11 +1,11 @@
 import math
 import argparse
 import numpy as np
+import cv2
 
 def get_arguments():
     parser = argparse.ArgumentParser("feature map dimention calculator")
-    parser.add_argument("--width","-wt",required=True,type=int)
-    parser.add_argument("--height","-ht",required=True,type=int)
+    parser.add_argument("--input","-i",required=True,type=str)
     parser.add_argument("--model","-m",required=True,type=str,choices=["vgg16","alexnet"])
     return parser.parse_args()
 
@@ -133,9 +133,9 @@ def cal_point_center_coords(model,w,h,c) -> tuple:
 if __name__ == '__main__':
     
     args = get_arguments()
-    w,h = args.width,args.height
+    img = cv2.imread(args.input)
     model_name = args.model
-    w,h,c = int(w),int(h),3
+    h,w,c = img.shape
     if model_name == "vgg16":
         model = vgg16
     elif model_name == "alexnet":
@@ -152,3 +152,7 @@ if __name__ == '__main__':
     centers,N,stride = cal_point_center_coords(model,w,h,c)
     print(f"point stride: {stride}\t point count: {N}")
     print("point centers: ",centers)
+    for x,y in centers:
+        cv2.circle(img,(int(x),int(y)),5,(255,0,0),1)
+    cv2.imshow("",img)
+    cv2.waitKey(0)
