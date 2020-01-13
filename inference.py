@@ -85,13 +85,19 @@ class RPN(torch.nn.Module):
         cls = cls[b,a,y,x,1]
 
         # get selected anchors and scale it
-        bboxes = self._get_refined_anchors((a,y,x),h,w)
+        bboxes = self._get_anchors((a,y,x),h,w)
+
+        # apply offset using regression to the bboxes
+        bboxes = self._refine_anchors(bboxes,reg)
 
         # filter with NMS
-        print("?",bboxes.size())
+        #pick = torchvision.ops.nms(bboxes)
+
+        # get only N of bboxes
+        
         return cls,reg,bboxes[:self._N,:]
 
-    def _get_refined_anchors(self,selected_indexes,h,w):
+    def _get_anchors(self,selected_indexes,h,w):
         bboxes = []
         offset_x = ((w-self.offset*2)%self.stride)/2 + self.offset
         offset_y = ((h-self.offset*2)%self.stride)/2 + self.offset
@@ -109,6 +115,18 @@ class RPN(torch.nn.Module):
             bbox = torch.cat([cx.view(1,1),cy.view(1,1),self.anchors[a[i]].view(1,2)],dim=1)
             bboxes.append(bbox)
         return torch.cat(bboxes,dim=0)
+
+    def _refine_anchors(self,bboxes:torch.Tensor,reg:torch.Tensor):
+        """
+        
+        Arguments:
+            bboxes {torch.Tensor} -- N,4 shape (center_x,center_y,width,height)
+            reg {torch.Tensor} -- N,4 shape
+        
+        Returns:
+            [type] -- [description]
+        """
+        return bboxes
 
     def apply_threshold(self,cls:torch.Tensor,reg:torch.Tensor,threshold:float) -> tuple:
         threshold = self.threshold if isinstance(threshold,type(None)) else threshold
