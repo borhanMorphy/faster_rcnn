@@ -62,12 +62,11 @@ def _scale_enum(anchor, scales):
     ws = w * scales
     hs = h * scales
     anchors = _mkanchors(ws, hs, x_ctr, y_ctr)
-    print(anchors)
     return anchors
 
 if __name__ == '__main__':
     import time
     t = time.time()
-    a = generate_anchors()
+    a = generate_anchors(ratios=[1],scales=np.array([32]))
     print(time.time() - t)
     print(a)
