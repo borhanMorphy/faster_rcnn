@@ -108,6 +108,8 @@ def calc_base_offset(model) -> float:
 
 def calc_point_count(model,w,h,c) -> tuple:
     base_offset = calc_base_offset(model)
+    print("baseoffset",base_offset)
+    exit(0)
     base_stride = calc_base_stride(model)
     assert min(w,h) >= base_offset*2,f"dimentions must be greater or equal to than {base_offset*2}"
     offset_x = ((w-base_offset*2)%base_stride)/2 + base_offset

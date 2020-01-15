@@ -2,7 +2,6 @@ import torch
 import torchvision
 import numpy as np
 
-
 def preprocess(x:np.ndarray):
     x = x.copy().astype(np.float32)
     x /= 255.0
@@ -13,19 +12,28 @@ def preprocess(x:np.ndarray):
 class FeatureNetwork(torch.nn.Module):
     def __init__(self):
         super(FeatureNetwork,self).__init__()
-        self.features = torchvision.models.alexnet(pretrained=True).features[:-1]
+        self.features = torchvision.models.vgg16(pretrained=True).features[:-1]
 
     def forward(self,x,**kwargs):
         return self.features(x,**kwargs)
 
 class RPN(torch.nn.Module):
-    def __init__(self,threshold:float=0.7,N:int=50,iou_threshold:float=0.6):
+    def __init__(self,
+            threshold:float=0.7,N:int=50,iou_threshold:float=0.7,
+            backbone:str="alexnet",model_path:str="vgg16_rpn.pth"):
         super(RPN,self).__init__()
-        anchor_ratios = torch.tensor([[1,1],[1,2]],dtype=torch.float32) # x:y
-        anchor_scales = [64,128]
-        
-        self.stride = 16         # for alexnet
-        self.offset = 17.5       # for alexnet
+        anchor_ratios = torch.tensor([[1,1],[1,2],[2,1]],dtype=torch.float32) # x:y
+        anchor_scales = [128,256,512]
+        if backbone == "alexnet":
+            self.stride = 16         # for alexnet
+            self.offset = 17.5       # for alexnet
+            self.fmap_channel = 256  # for alexnet
+        elif backbone == "vgg16":
+            self.stride = 16         # for vgg16
+            self.offset = 8          # for vgg16
+            self.fmap_channel = 512  # for vgg16
+        else:
+            raise ValueError("Backbone must be defined!")
         
         self.anchors = torch.cat(
             [
@@ -42,20 +50,31 @@ class RPN(torch.nn.Module):
         self.iou_threshold = iou_threshold
 
         self.conv1 = torch.nn.Conv2d(
-            in_channels=256,out_channels=256,
+            in_channels=self.fmap_channel,
+            out_channels=self.fmap_channel,
             kernel_size=3,stride=1,padding=1)
         
         self.conv2_cls = torch.nn.Conv2d(
-            in_channels=256,out_channels=2*self.anchor_size,
+            in_channels=self.fmap_channel,
+            out_channels=2*self.anchor_size,
             kernel_size=1,stride=1)
+
+        self.softmax = torch.nn.Softmax2d()
         
         self.conv2_reg = torch.nn.Conv2d(
-            in_channels=256,out_channels=4*self.anchor_size,
+            in_channels=self.fmap_channel,
+            out_channels=4*self.anchor_size,
             kernel_size=1,stride=1)
+        
+        # load weights
+        state_dict = torch.load(model_path,map_location=torch.device('cpu'))
+        self.load_state_dict(state_dict)
 
     def forward(self,x,h,w,threshold:float=None):
         x = self.conv1(x)
         cls,reg = self.conv2_cls(x),self.conv2_reg(x)
+        cls = self.softmax(cls)
+        
         ch,cw = cls.size()[-2:]
 
         # batch,k*2,ch,cw => batch,k,2,ch,cw => batch,k,ch,cw,2
@@ -65,13 +84,9 @@ class RPN(torch.nn.Module):
         reg = reg.view(-1,self.anchor_size,4,ch,cw).permute(0,1,3,4,2)
         
         # filter candidates using score threshold
-        cls,reg,bboxes = self.apply_nms(cls,reg,threshold,h,w)
+        cls,bboxes = self.apply_nms(cls,reg,threshold,h,w)
 
-        """
-        for reg,score in zip(reg,cls[:,:,1]): # for every batch, apply NMS
-            bboxes = reg*
-        """
-        return cls,reg,bboxes
+        return cls,bboxes
     
     def apply_nms(self,cls:torch.Tensor,reg:torch.Tensor,threshold:float,h=int,w=int):
 
@@ -91,11 +106,13 @@ class RPN(torch.nn.Module):
         bboxes = self._refine_anchors(bboxes,reg)
 
         # filter with NMS
-        #pick = torchvision.ops.nms(bboxes)
+        bboxes = self._xywh2xyxy(bboxes)
+        pick = torchvision.ops.nms(bboxes,cls,self.iou_threshold)
+        bboxes = bboxes[pick,:]
+        cls = cls[pick]
 
         # get only N of bboxes
-        
-        return cls,reg,bboxes[:self._N,:]
+        return cls[:self._N],bboxes[:self._N,:]
 
     def _get_anchors(self,selected_indexes,h,w):
         bboxes = []
@@ -116,36 +133,46 @@ class RPN(torch.nn.Module):
             bboxes.append(bbox)
         return torch.cat(bboxes,dim=0)
 
-    def _refine_anchors(self,bboxes:torch.Tensor,reg:torch.Tensor):
-        """
+    def _refine_anchors(self,anchors:torch.Tensor,reg:torch.Tensor):
+        """Appling bounding box reggresion
         
         Arguments:
-            bboxes {torch.Tensor} -- N,4 shape (center_x,center_y,width,height)
+            anchors {torch.Tensor} -- N,4 shape (center_x,center_y,width,height)
             reg {torch.Tensor} -- N,4 shape
         
         Returns:
-            [type] -- [description]
+            torch.Tensor -- [N,4] shape tensor with (center_x,center_y,width,height)
         """
         
         """
-            x,xa,x': regression,anchor,ground truth
-            y,ya,y': regression,anchor,ground truth
-            w,wa,w': regression,anchor,ground truth
-            h,ha,h': regression,anchor,ground truth
+            dx,xa,x': delta,anchor,ground truth
+            dy,ya,y': delta,anchor,ground truth
+            dw,wa,w': delta,anchor,ground truth
+            dh,ha,h': delta,anchor,ground truth
 
-            tx  =  (x - xa) / wa
-            ty  =  (y - ya) / ha
-            tw  =  log(w / wa)
-            th  =  log(h / ha)
+            prediction
+            x  = dx*wa+xa
+            y  = dy*ha+ya
+            w  = exp(dw)*wa
+            h  = exp(wh)*ha
 
-            tx' =  (x' - xa) / wa
-            ty' =  (y' - ya) / ha
-            tw' =  log(w' / wa)
-            th' =  log(h' / ha) 
-            
+            ground truth
+            x',y',w',h' 
         """
+        x = reg[:,0] * anchors[:,2] + anchors[:,0]
+        y = reg[:,1] * anchors[:,3] + anchors[:,1]
+        w = torch.exp(reg[:,2])*anchors[:,2]
+        h = torch.exp(reg[:,3])*anchors[:,3]
+        
+        return torch.stack([x,y,w,h]).t()
 
-        return bboxes
+    def _xywh2xyxy(self,bboxes:torch.Tensor):
+        x1 = bboxes[:,0] - bboxes[:,2]*0.5
+        y1 = bboxes[:,1] - bboxes[:,3]*0.5
+        x2 = bboxes[:,0] + bboxes[:,2]*0.5
+        y2 = bboxes[:,1] + bboxes[:,3]*0.5
+        return torch.stack([x1,y1,x2,y2]).t()
+        
 
     def apply_threshold(self,cls:torch.Tensor,reg:torch.Tensor,threshold:float) -> tuple:
         threshold = self.threshold if isinstance(threshold,type(None)) else threshold
@@ -158,6 +185,7 @@ class RPN(torch.nn.Module):
         selected_anchors = self.anchors[a]
 
 if __name__ == '__main__':
+    # TODO handle empty tensors
     import cv2,sys
     orig_img = cv2.cvtColor(cv2.imread(sys.argv[1]),cv2.COLOR_BGR2RGB)
     h,w,c = orig_img.shape
@@ -167,18 +195,17 @@ if __name__ == '__main__':
 
     fe = FeatureNetwork()
     
-    rpn = RPN(threshold=0.2,N=4)
+    rpn = RPN(threshold=0.2,N=4,backbone="vgg16")
 
     with torch.no_grad():
         x = fe(img)
-        cls,reg,bboxes = rpn(x,h,w)
+        cls,bboxes = rpn(x,h,w)
     print("cls :",cls.size())
-    print("reg :",reg.size())
+    #print("reg :",reg.size())
     bboxes = bboxes.numpy().tolist()
     orig_img = cv2.cvtColor(orig_img,cv2.COLOR_RGB2BGR)
-    for cx,cy,w,h in bboxes:
-        x1,y1 = int(cx-w/2),(int(cy-h/2))
-        x2,y2 = int(cx+w/2),(int(cy+h/2))
+    for x1,y1,x2,y2 in bboxes:
+        x1,y1,x2,y2 = int(x1),int(y1),int(x2),int(y2)
         cv2.rectangle(orig_img,(x1,y1),(x2,y2),(255,0,0),2)
     cv2.imshow("",orig_img)
     cv2.waitKey(0)
