@@ -126,6 +126,25 @@ class RPN(torch.nn.Module):
         Returns:
             [type] -- [description]
         """
+        
+        """
+            x,xa,x': regression,anchor,ground truth
+            y,ya,y': regression,anchor,ground truth
+            w,wa,w': regression,anchor,ground truth
+            h,ha,h': regression,anchor,ground truth
+
+            tx  =  (x - xa) / wa
+            ty  =  (y - ya) / ha
+            tw  =  log(w / wa)
+            th  =  log(h / ha)
+
+            tx' =  (x' - xa) / wa
+            ty' =  (y' - ya) / ha
+            tw' =  log(w' / wa)
+            th' =  log(h' / ha) 
+            
+        """
+
         return bboxes
 
     def apply_threshold(self,cls:torch.Tensor,reg:torch.Tensor,threshold:float) -> tuple:
@@ -137,8 +156,6 @@ class RPN(torch.nn.Module):
         reg = reg[b,a,y,x,:]
         cls = cls[b,a,y,x,1]
         selected_anchors = self.anchors[a]
-        
-
 
 if __name__ == '__main__':
     import cv2,sys
