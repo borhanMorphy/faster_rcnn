@@ -41,7 +41,8 @@ class RPN(torch.nn.Module):
                 for anchor_scale in anchor_scales
             ],
             dim=0
-        )
+        ) # tensor with shape of [k,2]
+        
         self.anchor_size = self.anchors.size()[0]
         
         

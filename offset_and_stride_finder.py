@@ -4,7 +4,7 @@ import numpy as np
 
 def get_arguments():
     parser = argparse.ArgumentParser("base stride and offset calculator")
-    parser.add_argument("--model","-m",required=True,type=str,choices=["vgg16","alexnet","rnet"])
+    parser.add_argument("--model","-m",required=True,type=str,choices=["vgg16","alexnet","pnet"])
     return parser.parse_args()
 
 class Op:
@@ -79,7 +79,7 @@ vgg16 = [
     Conv(3,1,1,512)
 ]
 
-rnet = [
+pnet = [
     Conv(3,1,0,10),
     Pool(2,2,0),
     Conv(3,1,0,16),
@@ -122,8 +122,8 @@ if __name__ == '__main__':
         model = vgg16
     elif model_name == "alexnet":
         model = alexnet
-    elif model_name == "rnet":
-        model = rnet
+    elif model_name == "pnet":
+        model = pnet
     else:
         raise ValueError("model not defined")
 
