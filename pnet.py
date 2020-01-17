@@ -100,6 +100,9 @@ class Pnet(nn.Module):
             scores.append(cls[pick])
         
         # cat
+        if len(boxes) == 0:
+            return []
+        
         boxes = torch.cat(boxes,dim=0)
         scores = torch.cat(scores,dim=0)
         # apply nms
@@ -175,14 +178,15 @@ class Pnet(nn.Module):
         # converting numpy => tensor
         data = torch.from_numpy(data.astype(np.float32)).to(self._device)
 
-        # converting n,h,w,c => n,c,w,h
-        data = data.permute(0,3,2,1)
+        # converting n,h,w,c => n,c,h,w
+        data = data.permute(0,3,1,2)
 
-        # scale
-        data = F.interpolate(data,size=(int(w*scale),int(h*scale)))
 
         # normalizing
         data = (data - 127.5) * 0.0078125
+
+        # scale
+        data = F.interpolate(data,size=(int(h*scale),int(w*scale)))
         
         return data
 
@@ -212,21 +216,21 @@ if __name__ == '__main__':
     model = Pnet(gpu=-1)
     try_count = 1
     start_time = time.time()
+    print("original: ",img.shape)
     for i in range(try_count):
         bboxes = model(img)
-        """
+        
         for x1,y1,x2,y2 in bboxes.cpu().numpy().tolist():
             h,w = img.shape[:2]
             x1 = int(max(0,x1))
             y1 = int(max(0,y1))
             x2 = int(min(w,x2))
             y2 = int(min(h,y2))
-            print(x1,y1,x2,y2)
-            im = img.copy()
-            cv2.rectangle(im,(x1,y1),(x2,y2),(0,0,255),2)
-            cv2.imshow("",im)
-            cv2.waitKey(0)
-        """
+            #print(x1,y1,x2,y2)
+            img = cv2.rectangle(img,(x1,y1),(x2,y2),(0,0,255),2)
+        cv2.imshow("",img)
+        cv2.waitKey(0)
+        
     print(f"avg inference time for pnet: {(time.time()-start_time)/try_count}")
 
 
