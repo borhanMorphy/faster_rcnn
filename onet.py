@@ -8,61 +8,76 @@ class Flatten(nn.Module):
     def forward(self, x):
         return x.view(x.size(0), -1)
 
-class Rnet(nn.Module):
+class Onet(nn.Module):
     def __init__(self,
             threshold:float=0.6,iou_threshold:float=0.5,
-            model_path:str="rnet.pth",gpu:int=-1):
-        super(Rnet,self).__init__()
+            model_path:str="onet.pth",gpu:int=-1):
+        super(Onet,self).__init__()
         self._device = torch.device("cpu") if gpu == -1 else torch.device(f"cuda:{gpu}") 
         self.threshold = torch.tensor(threshold).to(self._device)
         self.iou_threshold = torch.tensor(iou_threshold).to(self._device)
 
         # Layers 
         ############################################
-        self.conv1 = nn.Conv2d(in_channels=3,out_channels=28,
+        self.conv1 = nn.Conv2d(in_channels=3,out_channels=32,
             kernel_size=(3,3),stride=1,padding=0)
 
-        self.prelu1 = nn.PReLU(num_parameters=28)
+        self.prelu1 = nn.PReLU(num_parameters=32)
 
         self.max_pool1 = nn.MaxPool2d(
             kernel_size=(3,3),stride=2,padding=1)
         ############################################
 
         ############################################
-        self.conv2 = nn.Conv2d(in_channels=28,out_channels=48,
+        self.conv2 = nn.Conv2d(in_channels=32,out_channels=64,
             kernel_size=(3,3),stride=1,padding=0)
         
-        self.prelu2 = nn.PReLU(num_parameters=48)
+        self.prelu2 = nn.PReLU(num_parameters=64)
 
         self.max_pool2 = nn.MaxPool2d(
             kernel_size=(3,3),stride=2,padding=0)
         ############################################
 
         ############################################
-        self.conv3 = nn.Conv2d(in_channels=48,out_channels=64,
-            kernel_size=(2,2),stride=1,padding=0)
+        self.conv3 = nn.Conv2d(in_channels=64,out_channels=64,
+            kernel_size=(3,3),stride=1,padding=0)
         
         self.prelu3 = nn.PReLU(num_parameters=64)
 
-        self.flatten = Flatten() # 3x3x64 => 576
+        self.max_pool3 = nn.MaxPool2d(
+            kernel_size=(2,2),stride=2,padding=1)
+
         ############################################
 
         ############################################
-        self.linear4 = nn.Linear(576,128)
-
+        self.conv4 = nn.Conv2d(in_channels=64,out_channels=128,
+            kernel_size=(2,2),stride=1,padding=0)
+        
         self.prelu4 = nn.PReLU(num_parameters=128)
+
+        self.flatten = Flatten() # 3x3x128 => 1152
+        ############################################
+
+        ############################################
+        self.linear5 = nn.Linear(1152,256)
+
+        self.prelu5 = nn.PReLU(num_parameters=256)
         ############################################
 
 
         ############################################
-        self.linear5a = nn.Linear(128,2)
+        self.linear6a = nn.Linear(256,2)
 
         self.softmax = nn.Softmax(dim=1)
         ############################################
 
 
         ############################################
-        self.linear5b = nn.Linear(128,4)
+        self.linear6b = nn.Linear(256,4)
+        ############################################
+        
+        ############################################
+        self.linear6c = nn.Linear(256,10)
         ############################################
 
         state_dict = torch.load(model_path,map_location=self._device)
@@ -121,85 +136,7 @@ class Rnet(nn.Module):
         Returns:
             [type] -- [description]
         """
-        # crop bboxes from image and resize to 24x24x3
-        batch = []
-        h,w = image.shape[:2]
-        data = self.preprocess(image) # h,w,c => n,c,h,w
-
-        bboxes[bboxes[:,0] < 0 , 0] = 0
-        bboxes[bboxes[:,1] < 0 , 1] = 0
-        bboxes[bboxes[:,2] > w , 2] = w
-        bboxes[bboxes[:,3] > h , 3] = h
-        
-        for bbox in torch.split(bboxes,1,dim=0):
-            x1,y1,x2,y2 = bbox[0].int()
-            face = F.interpolate(data[:,:,y1:y2,x1:x2],size=(24,24)) # TODO maybe roi pool?
-            batch.append(face)
-        batch = torch.cat(batch)
-        
-        batch_size = batch.size(0)
-
-        # feed forward
-        batch = self.conv1(batch)
-        batch = self.prelu1(batch)
-        batch = self.max_pool1(batch)
-
-        batch = self.conv2(batch)
-        batch = self.prelu2(batch)
-        batch = self.max_pool2(batch)
-
-        batch = self.conv3(batch)
-        batch = self.prelu3(batch)
-        batch = self.flatten(batch)
-
-        batch = self.linear4(batch)
-        batch = self.prelu4(batch)
-
-        cls,reg = self.linear5a(batch),self.linear5b(batch)
-        cls = self.softmax(cls)
-
-        # apply threshold filter
-        pick, = torch.where(cls[:,1]>=self.threshold)
-        
-        cls = cls[pick,1]
-        reg = reg[pick,:]
-        bboxes = bboxes[pick,:]
-
-        # apply bbox regresssion
-        bboxes = self._bbox_regression(bboxes,reg)
-
-        # apply nms
-        pick = torchvision.ops.nms(bboxes,cls,self.iou_threshold)
-
-        # return bboxes
-        return bboxes[pick,:]
+        pass
 
 if __name__ == '__main__':
-    import cv2,sys
-    import time
-    img = cv2.imread(sys.argv[1])
-    print("original: ",img.shape)
-
-    from pnet import Pnet
-    import cv2
-    model_pnet = Pnet()
-    model_rnet = Rnet()
-
-    try_count = 100
-    start_time = time.time()
-    #for i in range(try_count):
-    bboxes = model_pnet(img)
-    print(bboxes.size())
-    bboxes = model_rnet(bboxes,img)
-    print(bboxes.size())
-    for x1,y1,x2,y2 in bboxes.numpy().tolist():
-        h,w = img.shape[:2]
-        x1 = int(max(0,x1))
-        y1 = int(max(0,y1))
-        x2 = int(min(w,x2))
-        y2 = int(min(h,y2))
-        #print(x1,y1,x2,y2)
-        img = cv2.rectangle(img,(x1,y1),(x2,y2),(0,0,255),2)
-    cv2.imshow("",img)
-    cv2.waitKey(0)
-    #print(f"avg inference time for pnet: {(time.time()-start_time)/try_count}")
+    Onet()
