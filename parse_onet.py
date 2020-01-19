@@ -3,7 +3,7 @@ import sys
 import numpy as np
 from collections import OrderedDict
 
-mtcnn_weight_path = "/home/borhanmorphy/localwork/mtcnn/mtcnn/data/mtcnn_weights.npy"
+mtcnn_weight_path = "../mtcnn/mtcnn/data/mtcnn_weights.npy"
 weights = np.load(mtcnn_weight_path,allow_pickle=True).tolist()
 
 layers = [

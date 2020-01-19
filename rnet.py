@@ -10,7 +10,7 @@ class Flatten(nn.Module):
 
 class Rnet(nn.Module):
     def __init__(self,
-            threshold:float=0.6,iou_threshold:float=0.5,
+            threshold:float=0.7,iou_threshold:float=0.5,
             model_path:str="rnet.pth",gpu:int=-1):
         super(Rnet,self).__init__()
         self._device = torch.device("cpu") if gpu == -1 else torch.device(f"cuda:{gpu}") 

@@ -5,11 +5,11 @@ import numpy as np
 import torchvision
 
 class Pnet(nn.Module):
-    def __init__(self,
-            threshold:float=0.6,iou_threshold:float=0.5,
-            model_path:str="pnet.pth",gpu:int=-1):
+    def __init__(self,threshold:float=0.6,
+            iou_threshold:float=0.5,model_path:str="pnet.pth",
+            gpu:int=-1,training:bool=False):
         super(Pnet,self).__init__()
-        self._device = torch.device("cpu") if gpu == -1 else torch.device(f"cuda:{gpu}") 
+        self._device = torch.device("cpu") if gpu == -1 else torch.device(f"cuda:{gpu}")
         self.threshold = torch.tensor(threshold).to(self._device)
         self.iou_threshold = torch.tensor(iou_threshold).to(self._device)
         
@@ -42,25 +42,32 @@ class Pnet(nn.Module):
         self.conv4b = nn.Conv2d(in_channels=32,out_channels=4,
             kernel_size=(1,1),stride=1,padding=0)
 
-        self.softmax1 = nn.Softmax2d()
+        self.softmax = nn.Softmax2d()
 
         state_dict = torch.load(model_path,map_location=self._device)
         self.load_state_dict(state_dict)
-        self.requires_grad_(False)
+        self.requires_grad_(training)
         self.to(self._device)
-        self.eval()
+        self.training = training
+        if training:
+            self.train()
+        else:
+            self.eval()
+        
+    def _gen_gt_boxes(self,ground_truths):
+        pass
 
-    def forward(self,img:np.ndarray):
+    def forward(self,img:np.ndarray,**kwargs):
         # calculate scales
         scales = self.scale_pyramid(img.shape[:2])
         
-        boxes,scores = [],[]
+        boxes,scores,regressions = [],[],[]
         for scale in scales:
             # preprocess
             x = self.preprocess(img,scale)
             # extract w and h
             h,w = x.size()[-2:]
-
+            
             # forward with conv net
             x = self.conv1(x)
             x = self.prelu1(x)
@@ -70,11 +77,13 @@ class Pnet(nn.Module):
             x = self.conv3(x)
             x = self.prelu3(x)
             cls,reg = self.conv4a(x),self.conv4b(x)
-            cls = self.softmax1(cls)
+            cls = self.softmax(cls)
 
             # transform
             # regression batch_size,4,h,w => batch_size,h,w,4
             reg = reg.permute(0,2,3,1)
+            print(reg.numpy()[0,:1,:1,:])
+            cv2.waitKey(0)
 
             # classification batch_size,2,h,w => batch_size,h,w,2
             cls = cls.permute(0,2,3,1)
@@ -89,41 +98,48 @@ class Pnet(nn.Module):
             windows = self._gen_windows((y,x),(h,w),scale)
             if isinstance(windows,type(None)):
                 continue
-
-            # apply bbox regression
-            bboxes = self._bbox_regression(windows,reg)
-
-            # apply nms
-            pick = torchvision.ops.nms(bboxes,cls,self.iou_threshold)
             
-            boxes.append(bboxes[pick,:])
-            scores.append(cls[pick])
-        
-        # cat
-        if len(boxes) == 0:
-            return []
+            bboxes = self._xywh2xyxy(windows)
+            
+            if not self.training:
+                # apply nms
+                pick = torchvision.ops.nms(bboxes,cls,self.iou_threshold)
+                bboxes = bboxes[pick,:]
+                cls = cls[pick]
+                reg = reg[pick]
+
+            boxes.append(bboxes)
+            scores.append(cls)
+            regressions.append(reg)
         
         boxes = torch.cat(boxes,dim=0)
         scores = torch.cat(scores,dim=0)
-        # apply nms
-        pick = torchvision.ops.nms(boxes,scores,self.iou_threshold+0.2)
+        regressions = torch.cat(regressions,dim=0)
+        
+        # apply bbox regression
+        boxes = self._bbox_regression(boxes,regressions)
 
-        return boxes[pick,:]
+        if not self.training:
+            # apply nms
+            pick = torchvision.ops.nms(boxes,scores,self.iou_threshold+0.2)
+            boxes = boxes[pick,:]
+
+        return boxes
 
     def _bbox_regression(self,windows:torch.Tensor,reg:torch.Tensor):
         """bounding box regression
         
         Arguments:
-            windows {torch.Tensor} -- [N,4] with order of cx,cy,w,h
+            windows {torch.Tensor} -- [N,4] with order of x1,y1,x2,y2
             reg {torch.Tensor} -- [N,4] with order of x1,y1,x2,y2
         
         Returns:
             torch.Tensor -- calibrated bounding boxes with order of x1,y1,x2,y2
         """
         windows = windows.to(self._device)
-        w,h = windows[:,2],windows[:,3]
-        # transform cx cy w h => x1 y1 x2 y2
-        windows = self._xywh2xyxy(windows)
+        
+        w = windows[:,2]-windows[:,0]
+        h = windows[:,3]-windows[:,1]
 
         x1 = windows[:,0] + reg[:,0]*w
         y1 = windows[:,1] + reg[:,1]*h
@@ -160,13 +176,8 @@ class Pnet(nn.Module):
             return
 
         windows = torch.cat([self.window.view(-1,2) for _ in range(n)],dim=0)
-        
-        windows /= scale
-        
-        cx /= scale
-        cy /= scale
 
-        return torch.cat([cx.view(-1,1),cy.view(-1,1),windows],dim=1)
+        return torch.cat([cx.view(-1,1),cy.view(-1,1),windows],dim=1)/scale
 
     def preprocess(self, data, scale:float=1.0):
         
@@ -178,20 +189,19 @@ class Pnet(nn.Module):
         # converting numpy => tensor
         data = torch.from_numpy(data.astype(np.float32)).to(self._device)
 
-        # converting n,h,w,c => n,c,h,w
-        data = data.permute(0,3,1,2)
-
 
         # normalizing
         data = (data - 127.5) * 0.0078125
+
+        # converting n,h,w,c => n,c,h,w
+        data = data.permute(0,3,1,2)
 
         # scale
         data = F.interpolate(data,size=(int(h*scale),int(w*scale)))
         
         return data
 
-    def scale_pyramid(self,dims,
-            min_face_size:int=20,
+    def scale_pyramid(self,dims,min_face_size:int=20,
             scale_factor:float=0.709):
         # TODO handle batch
         h,w = dims
@@ -211,27 +221,11 @@ class Pnet(nn.Module):
 if __name__ == '__main__':
     import cv2,sys
     import time
-    img = cv2.imread(sys.argv[1])
+    img = cv2.cvtColor(cv2.imread(sys.argv[1]),cv2.COLOR_BGR2RGB)
     
-    model = Pnet(gpu=-1)
-    try_count = 1
-    start_time = time.time()
-    print("original: ",img.shape)
-    for i in range(try_count):
-        bboxes = model(img)
-        
-        for x1,y1,x2,y2 in bboxes.cpu().numpy().tolist():
-            h,w = img.shape[:2]
-            x1 = int(max(0,x1))
-            y1 = int(max(0,y1))
-            x2 = int(min(w,x2))
-            y2 = int(min(h,y2))
-            #print(x1,y1,x2,y2)
-            img = cv2.rectangle(img,(x1,y1),(x2,y2),(0,0,255),2)
-        cv2.imshow("",img)
-        cv2.waitKey(0)
-        
-    print(f"avg inference time for pnet: {(time.time()-start_time)/try_count}")
+    model = Pnet(gpu=-1,training=False)
+    
+    bboxes = model(img)
 
 
     
