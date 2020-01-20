@@ -54,8 +54,27 @@ class Pnet(nn.Module):
         else:
             self.eval()
         
-    def _gen_gt_boxes(self,ground_truths):
+    def _gen_prediction_results(self,ground_truths:torch.Tensor,
+            predictions:torch.Tensor,scores:torch.Tensor):
+        """label each prediction as true positive or false positive using ground truths
+        
+        Arguments:
+            ground_truths {torch.Tensor} -- N,4 boxes with order of x1,y1,x2,y2
+            predictions {torch.Tensor} -- N,4 boxes with order of x1,y1,x2,y2
+            scores {torch.Tensor} -- N scores of boxes
+        """
         pass
+
+    def _rerec(self,bbox:torch.Tensor):
+        # convert bbox to square
+        height = bbox[:, 3] - bbox[:, 1]
+        width = bbox[:, 2] - bbox[:, 0]
+        dim = torch.stack([width,height])
+        max_side_length,max_side_indexes = dim.max(dim=0)
+        bbox[:, 0] = bbox[:, 0] + width * 0.5 - max_side_length * 0.5
+        bbox[:, 1] = bbox[:, 1] + height * 0.5 - max_side_length * 0.5
+        bbox[:, 2:4] = bbox[:, 0:2] + max_side_length.repeat(2, 1).t()
+        return bbox
 
     def forward(self,img:np.ndarray,**kwargs):
         # calculate scales
@@ -82,8 +101,6 @@ class Pnet(nn.Module):
             # transform
             # regression batch_size,4,h,w => batch_size,h,w,4
             reg = reg.permute(0,2,3,1)
-            print(reg.numpy()[0,:1,:1,:])
-            cv2.waitKey(0)
 
             # classification batch_size,2,h,w => batch_size,h,w,2
             cls = cls.permute(0,2,3,1)
@@ -99,7 +116,7 @@ class Pnet(nn.Module):
             if isinstance(windows,type(None)):
                 continue
             
-            bboxes = self._xywh2xyxy(windows)
+            bboxes = windows#self._xywh2xyxy(windows)
             
             if not self.training:
                 # apply nms
@@ -115,14 +132,24 @@ class Pnet(nn.Module):
         boxes = torch.cat(boxes,dim=0)
         scores = torch.cat(scores,dim=0)
         regressions = torch.cat(regressions,dim=0)
-        
-        # apply bbox regression
-        boxes = self._bbox_regression(boxes,regressions)
+
 
         if not self.training:
             # apply nms
             pick = torchvision.ops.nms(boxes,scores,self.iou_threshold+0.2)
             boxes = boxes[pick,:]
+
+            # apply bbox regression
+            boxes = self._bbox_regression(boxes,regressions)
+
+            # bbox to rect
+            boxes = self._rerec(boxes)
+
+            # drop
+            boxes = self._drop_unvalid_boxes(boxes)
+        else:
+            # generate prediction result using ground truths
+            self._gen_prediction_results()
 
         return boxes
 
@@ -165,19 +192,23 @@ class Pnet(nn.Module):
         y = y.cpu().float() if y.is_cuda else y.float()
         x = x.cpu().float() if x.is_cuda else x.float()
         
-        offset_x = ((w-self.offset*2)%self.stride)/2 + self.offset
-        offset_y = ((h-self.offset*2)%self.stride)/2 + self.offset
-        
-        cx = x * self.stride+offset_x
-        cy = y * self.stride+offset_y
+        #offset_x = ((w-self.offset*2)%self.stride)/2 + self.offset
+        #offset_y = ((h-self.offset*2)%self.stride)/2 + self.offset
+        #
+        #cx = x * self.stride+offset_x
+        #cy = y * self.stride+offset_y
+        dims = torch.stack([y,x],dim=0).t()
+        qq1 = (dims * self.stride + 1)/scale
+        qq2 = (dims * self.stride + 12)/scale
         
         n = y.size()[0]
         if n == 0:
             return
 
-        windows = torch.cat([self.window.view(-1,2) for _ in range(n)],dim=0)
+        #windows = torch.cat([self.window.view(-1,2) for _ in range(n)],dim=0)
 
-        return torch.cat([cx.view(-1,1),cy.view(-1,1),windows],dim=1)/scale
+        #return torch.cat([cx.view(-1,1),cy.view(-1,1),windows],dim=1)/scale
+        return torch.cat([qq1,qq2],dim=1)
 
     def preprocess(self, data, scale:float=1.0):
         
@@ -217,6 +248,19 @@ class Pnet(nn.Module):
             factor_count += 1
 
         return scales
+    
+    def _drop_unvalid_boxes(self,boxes:torch.Tensor):
+        bb = []
+        for i,bbox in enumerate(boxes):
+            x1,y1,x2,y2 = bbox.int()
+            if i == 28:
+                print(x1,y1,x2,y2)
+            if x2-x1 > 0 and y2-y1 > 0:
+                bb.append(bbox)
+                print("girdi")
+            else:
+                print(x1,x2,y1,y2)
+        return torch.stack(bb,dim=0)
 
 if __name__ == '__main__':
     import cv2,sys
@@ -226,6 +270,17 @@ if __name__ == '__main__':
     model = Pnet(gpu=-1,training=False)
     
     bboxes = model(img)
+    img = cv2.cvtColor(img,cv2.COLOR_RGB2BGR)
+    for x1,y1,x2,y2 in bboxes.numpy().tolist():
+        x1 = int(x1)
+        y1 = int(y1)
+        x2 = int(x2)
+        y2 = int(y2)
+
+        temp_img = cv2.rectangle(img.copy(),(x1,y1),(x2,y2),(0,0,255),2)
+
+        cv2.imshow("",temp_img)
+        cv2.waitKey(0)
 
 
     

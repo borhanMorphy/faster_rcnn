@@ -146,6 +146,8 @@ class Onet(nn.Module):
         
         for bbox in torch.split(bboxes,1,dim=0):
             x1,y1,x2,y2 = bbox[0].int()
+            if y2-y1 <= 0 or x2-x1 <= 0:
+                continue
             face = F.interpolate(data[:,:,y1:y2,x1:x2],size=(48,48)) # TODO maybe roi pool?
             batch.append(face)
         batch = torch.cat(batch)
@@ -190,7 +192,7 @@ class Onet(nn.Module):
         return bboxes[pick,:]
 
 def show(bboxes,img):
-    
+    img = cv2.cvtColor(img,cv2.COLOR_RGB2BGR)
     for x1,y1,x2,y2 in bboxes:
         h,w = img.shape[:2]
         x1 = int(max(0,x1))
@@ -206,7 +208,7 @@ def show(bboxes,img):
 if __name__ == '__main__':
     import cv2,sys
     import time
-    img = cv2.imread(sys.argv[1])
+    img = cv2.cvtColor(cv2.imread(sys.argv[1]),cv2.COLOR_RGB2BGR)
     print("original: ",img.shape)
 
     from pnet import Pnet

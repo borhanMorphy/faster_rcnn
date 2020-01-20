@@ -81,11 +81,11 @@ class Rnet(nn.Module):
         # converting numpy => tensor
         data = torch.from_numpy(data.astype(np.float32)).to(self._device)
 
-        # converting n,h,w,c => n,c,h,w
-        data = data.permute(0,3,1,2)
-
         # normalizing
         data = (data - 127.5) * 0.0078125
+
+        # converting n,h,w,c => n,c,h,w
+        data = data.permute(0,3,1,2)
         
         return data
 
@@ -125,14 +125,12 @@ class Rnet(nn.Module):
         batch = []
         h,w = image.shape[:2]
         data = self.preprocess(image) # h,w,c => n,c,h,w
-
-        bboxes[bboxes[:,0] < 0 , 0] = 0
-        bboxes[bboxes[:,1] < 0 , 1] = 0
-        bboxes[bboxes[:,2] > w , 2] = w
-        bboxes[bboxes[:,3] > h , 3] = h
         
-        for bbox in torch.split(bboxes,1,dim=0):
-            x1,y1,x2,y2 = bbox[0].int()
+        for x1,y1,x2,y2 in bboxes:
+            x1 = int(max(0,x1))
+            y1 = int(max(0,y1))
+            x2 = int(min(w,x2))
+            y2 = int(min(h,y2))
             face = F.interpolate(data[:,:,y1:y2,x1:x2],size=(24,24)) # TODO maybe roi pool?
             batch.append(face)
         batch = torch.cat(batch)
@@ -174,10 +172,22 @@ class Rnet(nn.Module):
         # return bboxes
         return bboxes[pick,:]
 
+def show(bboxes,img):
+    img = cv2.cvtColor(img,cv2.COLOR_RGB2BGR)
+    for x1,y1,x2,y2 in bboxes:
+        h,w = img.shape[:2]
+        x1 = int(max(0,x1))
+        y1 = int(max(0,y1))
+        x2 = int(min(w,x2))
+        y2 = int(min(h,y2))
+        img = cv2.rectangle(img,(x1,y1),(x2,y2),(0,0,255),2)
+    cv2.imshow("",img)
+    cv2.waitKey(0)
+
 if __name__ == '__main__':
     import cv2,sys
     import time
-    img = cv2.imread(sys.argv[1])
+    img = cv2.cvtColor(cv2.imread(sys.argv[1]),cv2.COLOR_BGR2RGB)
     print("original: ",img.shape)
 
     from pnet import Pnet
@@ -185,21 +195,9 @@ if __name__ == '__main__':
     model_pnet = Pnet()
     model_rnet = Rnet()
 
-    try_count = 100
-    start_time = time.time()
-    #for i in range(try_count):
     bboxes = model_pnet(img)
     print(bboxes.size())
+    show(bboxes.clone(),img.copy())
     bboxes = model_rnet(bboxes,img)
     print(bboxes.size())
-    for x1,y1,x2,y2 in bboxes.numpy().tolist():
-        h,w = img.shape[:2]
-        x1 = int(max(0,x1))
-        y1 = int(max(0,y1))
-        x2 = int(min(w,x2))
-        y2 = int(min(h,y2))
-        #print(x1,y1,x2,y2)
-        img = cv2.rectangle(img,(x1,y1),(x2,y2),(0,0,255),2)
-    cv2.imshow("",img)
-    cv2.waitKey(0)
-    #print(f"avg inference time for pnet: {(time.time()-start_time)/try_count}")
+    show(bboxes,img.copy())
