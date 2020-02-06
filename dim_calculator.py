@@ -6,7 +6,7 @@ def get_arguments():
     parser = argparse.ArgumentParser("feature map dimention calculator")
     parser.add_argument("--width","-wt",required=True,type=int)
     parser.add_argument("--height","-ht",required=True,type=int)
-    parser.add_argument("--model","-m",required=True,type=str,choices=["vgg16","alexnet"])
+    parser.add_argument("--model","-m",required=True,type=str,choices=["vgg16","alexnet","pnet"])
     return parser.parse_args()
 
 class Op:
@@ -80,6 +80,13 @@ vgg16 = [
     Conv(3,1,1,512),
     Conv(3,1,1,512)
 ]
+pnet = [
+    Conv(3,1,0,10),
+    Pool(2,2,0),
+    Conv(3,1,0,16),
+    Conv(3,1,0,32),
+    Conv(1,1,0,2)
+]
 
 def inference(model,w,h,c):
     for layer in model:
@@ -142,6 +149,8 @@ if __name__ == '__main__':
         model = vgg16
     elif model_name == "alexnet":
         model = alexnet
+    elif model_name == "pnet":
+        model = pnet
     else:
         raise ValueError("model not defined")
 

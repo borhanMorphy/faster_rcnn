@@ -126,8 +126,10 @@ if __name__ == '__main__':
         model = pnet
     else:
         raise ValueError("model not defined")
-
+    #print(reverse_inference(model,1,2))
+    
     offset = calc_base_offset(model)
     stride = calc_base_stride(model)
     
-    print(f"model: {model_name}\nbase stride: {stride}\nbase offset: {offset}")
+    print(f"model: {model_name}\nbase stride: {stride}\nbase offset: {offset}\nsliding windows size:{offset*2}")
+    

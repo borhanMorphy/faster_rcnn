@@ -6,7 +6,7 @@ import cv2
 def get_arguments():
     parser = argparse.ArgumentParser("feature map dimention calculator")
     parser.add_argument("--input","-i",required=True,type=str)
-    parser.add_argument("--model","-m",required=True,type=str,choices=["vgg16","alexnet"])
+    parser.add_argument("--model","-m",required=True,type=str,choices=["vgg16","alexnet","pnet"])
     return parser.parse_args()
 
 class Op:
@@ -80,6 +80,13 @@ vgg16 = [
     Conv(3,1,1,512),
     Conv(3,1,1,512)
 ]
+pnet = [
+    Conv(3,1,0,10),
+    Pool(2,2,0),
+    Conv(3,1,0,16),
+    Conv(3,1,0,32),
+    Conv(1,1,0,2)
+]
 
 def inference(model,w,h,c):
     for layer in model:
@@ -134,12 +141,15 @@ if __name__ == '__main__':
     
     args = get_arguments()
     img = cv2.imread(args.input)
+    img = cv2.resize(img,(28,28))
     model_name = args.model
     h,w,c = img.shape
     if model_name == "vgg16":
         model = vgg16
     elif model_name == "alexnet":
         model = alexnet
+    elif model_name == "pnet":
+        model = pnet
     else:
         raise ValueError("model not defined")
 
@@ -152,6 +162,7 @@ if __name__ == '__main__':
     centers,N,stride = cal_point_center_coords(model,w,h,c)
     print(f"point stride: {stride}\t point count: {N}")
     print("point centers: ",centers)
+    print(len(centers))
     for x,y in centers:
         cv2.circle(img,(int(x),int(y)),5,(255,0,0),1)
     cv2.imshow("",img)
