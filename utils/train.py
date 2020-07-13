@@ -4,7 +4,7 @@ from typing import Tuple,List,Dict
 import numpy as np
 from cv2 import cv2
 
-def build_targets(preds:torch.Tensor, regs:torch.Tensor, default_boxes:torch.Tensor, targets:Dict,
+def build_targets(preds:torch.Tensor, regs:torch.Tensor, default_boxes:torch.Tensor, gt_boxes:torch.Tensor, gt_classes:torch.Tensor,
         negative_iou_threshold:float=0.3, positive_iou_threshold:float=0.7, ignore_indexes:torch.Tensor=None, img=None):
     """[summary]
 
@@ -12,7 +12,6 @@ def build_targets(preds:torch.Tensor, regs:torch.Tensor, default_boxes:torch.Ten
         preds (torch.Tensor): nA x Gy x Gx x 2
         regs (torch.Tensor): nA x Gy x Gx x 4
         default_boxes (torch.Tensor): (nA * Gy * Gx) x 4
-        targets (Dict): {'boxes':torch.Tensor, 'classes':torch.Tensor, 'img_dims':torch.Tensor}
         negative_iou_threshold (float, optional): [description]. Defaults to 0.3.
         positive_iou_threshold (float, optional): [description]. Defaults to 0.7.
         ignore_indexes (torch.Tensor, optional): X,4 Defaults to None.
@@ -31,7 +30,7 @@ def build_targets(preds:torch.Tensor, regs:torch.Tensor, default_boxes:torch.Ten
 
     # ps: N = nA * Gy * Gx
     # N,4 | M,4 => N,M
-    ious = jaccard_vectorized(default_boxes, targets['boxes'])
+    ious = jaccard_vectorized(default_boxes, gt_boxes)
 
     max_values,matched_gt_indexes = ious.max(dim=1)
     # max_values: N, {iou values between prediction and matched gt}
@@ -40,7 +39,7 @@ def build_targets(preds:torch.Tensor, regs:torch.Tensor, default_boxes:torch.Ten
     positives_mask = max_values > positive_iou_threshold # N, boolean mask
     negatives_mask = max_values < negative_iou_threshold # N, boolean mask
 
-    for j in range(targets['boxes'].size(0)):
+    for j in range(gt_boxes.size(0)):
         for k in ious[:,j].argsort(descending=True):
             if ignore_indexes is not None and k in ignore_indexes: continue
             positives_mask[k] = True
@@ -69,7 +68,7 @@ def build_targets(preds:torch.Tensor, regs:torch.Tensor, default_boxes:torch.Ten
 
     p_regs = p_regs[picked_positives]
     # TODO convert gt boxes to gt offsets
-    gt_regs = targets['boxes'][matched_gt_indexes][picked_positives]
+    gt_regs = gt_boxes[matched_gt_indexes][picked_positives]
     gt_regs = xyxy2offsets(gt_regs, default_boxes[picked_positives], img)
 
     return (p_preds,gt_preds),(p_regs,gt_regs)

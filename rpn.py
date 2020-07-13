@@ -46,6 +46,9 @@ class DetectionLayer(nn.Module):
         # bs x num_anchors*4 x fmap_h x fmap_w => bs x 4 x nA x fmap_h x fmap_w => bs x nA x fmap_h x fmap_w x 4
         regs = regs.reshape(bs,4,-1,fh,fw).permute(0,2,3,4,1).contiguous()
 
+        if preds.device != self.anchors.device:
+            self.anchors = self.anchors.to(preds.device)
+            
         if fw != self._fw or fh != self._fh:
             # re-generate default boxes if feature map size is changed
             self._fw = fw
@@ -54,8 +57,6 @@ class DetectionLayer(nn.Module):
                 self.anchors, (self._fh, self._fw),
                 self.effective_stride, device=preds.device)
 
-        if preds.device != self.default_boxes.device:
-            self.default_boxes = self.default_boxes.to(preds.device)
 
         return preds,regs
 
@@ -93,9 +94,11 @@ class RPN(nn.Module):
 
     Number of anchors selected from paper, where num_anchors: num_scales * num_ratios
     """
-    def __init__(self, features:int=512, n:int=3, effective_stride:int=16,
+    def __init__(self, backbone, features:int=512, n:int=3, effective_stride:int=16,
             anchor_scales:List=[0.5,1,2], anchor_ratios:List=[0.5,1,2]):
         super(RPN,self).__init__()
+
+        self.backbone = backbone
         assert n % 2 == 1,"kernel size must be odd"
 
         num_anchors = len(anchor_ratios) * len(anchor_scales)
@@ -121,7 +124,8 @@ class RPN(nn.Module):
 
         self.debug = True
 
-    def forward(self, fmap:torch.Tensor):
+    def forward(self, batch:torch.Tensor):
+        fmap = self.backbone(batch)
         output = self.base_conv_layer(fmap)
 
         preds = self.cls_conv_layer(output)
@@ -132,15 +136,21 @@ class RPN(nn.Module):
     def training_step(self, batch, targets, imgs:List=None):
         # preds: bs x nA x fmap_h x fmap_w x 2
         # regs: bs x nA x fmap_h x fmap_w x 4
+
         preds,regs = self.forward(batch)
         bs = preds.size(0)
 
-        for i in range(bs):
+        total_loss = 0
 
-            ignore_indexes = get_ignore_boxes(self.detection_layer.default_boxes, img_dims=targets[i]['img_dims'])
+        for i in range(bs):
+            img_dims = targets[i]["img_dims"].cuda()
+            gt_boxes = targets[i]["boxes"].cuda()
+            gt_classes = targets[i]["classes"].cuda()
+
+            ignore_indexes = get_ignore_boxes(self.detection_layer.default_boxes, img_dims=img_dims)
             (p_preds,gt_preds),(p_regs,gt_regs) = build_targets(preds[i], regs[i],
-                self.detection_layer.default_boxes,
-                targets[i], ignore_indexes=ignore_indexes, img=imgs[i])
+                self.detection_layer.default_boxes, gt_boxes, gt_classes,
+                ignore_indexes=ignore_indexes, img=imgs[i])
 
             """
             if self.debug:
@@ -157,8 +167,22 @@ class RPN(nn.Module):
                     cv2.waitKey(0)
             """
 
-            # TODO calculate loss functions
-            cls_loss = F.binary_cross_entropy_with_logits(p_preds[i][p_mask], t_preds[i][p_mask])
+            cls_loss = F.binary_cross_entropy_with_logits(p_preds[:,0], gt_preds, reduction='sum')
+
+            reg_loss = F.mse_loss(p_regs[:,0],gt_regs[:,0], reduction='sum') + \
+                F.mse_loss(p_regs[:,1],gt_regs[:,1], reduction='sum') + \
+                    F.mse_loss(p_regs[:,2],gt_regs[:,2], reduction='sum') + \
+                        F.mse_loss(p_regs[:,3],gt_regs[:,3], reduction='sum')
+
+            Ncls = 256
+            Nreg = 2400
+            w_lamda = 10
+
+            total_loss += cls_loss/Ncls + (w_lamda*reg_loss)/Nreg
+
+        return total_loss
+
+
 
 
 if __name__ == "__main__":
