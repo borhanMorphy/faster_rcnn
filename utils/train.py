@@ -1,77 +1,103 @@
 import torch
-from .box import jaccard_vectorized
-from typing import Tuple,List
+from .box import jaccard_vectorized,xyxy2cxcywh
+from typing import Tuple,List,Dict
 import numpy as np
+from cv2 import cv2
 
-def assign_targets(preds:torch.Tensor, default_boxes:torch.Tensor, target_boxes:torch.Tensor,
-        negative_iou_threshold:float=0.3, positive_iou_threshold:float=0.7, ignore_indexes:List=None):
-    # TODO check ignore indexes
-    """Assigns negative to positives
+def build_targets(preds:torch.Tensor, regs:torch.Tensor, default_boxes:torch.Tensor, targets:Dict,
+        negative_iou_threshold:float=0.3, positive_iou_threshold:float=0.7, ignore_indexes:torch.Tensor=None, img=None):
+    """[summary]
 
-    Arguments:
-        preds: nA x grid_y x grid_x x 2
-        default_boxes: (nA*fmap_h*fmap_w),4
+    Args:
+        preds (torch.Tensor): nA x Gy x Gx x 2
+        regs (torch.Tensor): nA x Gy x Gx x 4
+        default_boxes (torch.Tensor): (nA * Gy * Gx) x 4
+        targets (Dict): {'boxes':torch.Tensor, 'classes':torch.Tensor, 'img_dims':torch.Tensor}
+        negative_iou_threshold (float, optional): [description]. Defaults to 0.3.
+        positive_iou_threshold (float, optional): [description]. Defaults to 0.7.
+        ignore_indexes (torch.Tensor, optional): X,4 Defaults to None.
 
     Returns:
-        positive_mask: nA x grid_y x grid_x
+        p_preds.shape(Np,2) == gt_preds.shape(Np,2) # as {FG,BG}
+        p_regs.shape(Nr,4) == gt_regs.shape(Nr,4) # as (tx,ty,tw,th)
+        (p_preds,gt_preds),(p_regs,gt_regs)
     """
+    nA,Gy,Gx,_ = preds.shape
 
-    num_anchors,grid_y,grid_x,_ = preds.shape
-    device = preds.device
-    positive_mask = torch.zeros(*(num_anchors,grid_y,grid_x), dtype=torch.bool, device=device)
-    negative_mask = torch.zeros(*(num_anchors,grid_y,grid_x), dtype=torch.bool, device=device)
+    p_preds = preds.reshape(-1,2)
+    gt_preds = torch.zeros(*(nA*Gy*Gx,), dtype=preds.dtype, device=preds.device)
 
+    p_regs = regs.reshape(-1,4)
+
+    # ps: N = nA * Gy * Gx
     # N,4 | M,4 => N,M
-    ious = jaccard_vectorized(default_boxes, target_boxes)
+    ious = jaccard_vectorized(default_boxes, targets['boxes'])
 
-    pos_proposals,pos_gts = torch.where(ious > positive_iou_threshold)
-    neg_proposals,_ = torch.where(ious < negative_iou_threshold)
+    max_values,matched_gt_indexes = ious.max(dim=1)
+    # max_values: N, {iou values between prediction and matched gt}
+    # matched_gt_indexes: N, {gt index that matched with prediction}
 
-    positive_mask = positive_mask.reshape(-1)
-    positive_mask[pos_proposals] = True
+    positives_mask = max_values > positive_iou_threshold # N, boolean mask
+    negatives_mask = max_values < negative_iou_threshold # N, boolean mask
 
-    negative_mask = negative_mask.reshape(-1)
-    negative_mask[neg_proposals] = True
-
-    # add best matches
-    for j in range(target_boxes.size(0)):
+    for j in range(targets['boxes'].size(0)):
         for k in ious[:,j].argsort(descending=True):
-            if ignore_indexes is not None and k in ignore_indexes:
-                continue
-            positive_mask[k] = True
+            if ignore_indexes is not None and k in ignore_indexes: continue
+            positives_mask[k] = True
+            negatives_mask[k] = False
+            break
 
-    # extract negative indexes
     if ignore_indexes is not None:
-        positive_mask[ignore_indexes] = False
-        negative_mask[ignore_indexes] = False
-    
-    positive_mask = positive_mask.reshape(num_anchors,grid_y,grid_x)
-    negative_mask = negative_mask.reshape(num_anchors,grid_y,grid_x)
+        positives_mask[ignore_indexes] = False
+        negatives_mask[ignore_indexes] = False
 
-    return positive_mask,negative_mask
+    gt_preds[positives_mask] = 1.
+    gt_preds[negatives_mask] = 0
 
-def sample_positive_and_negatives(positives, negatives,
-        positive_count:int=128, total_count:int=256):
+    # resample positives and negatives as 128:128
+    positives, = torch.where(positives_mask)
+    negatives, = torch.where(negatives_mask)
+    positive_count = min(positives.size(0),128)
+    negative_count = 256-positive_count
+
+    picked_positives = np.random.choice(positives.cpu().numpy(), size=positive_count, replace=False)
+    picked_negatives = np.random.choice(negatives.cpu().numpy(), size=negative_count, replace=False)
+    ##################################################
+
+    gt_preds = torch.cat([ gt_preds[picked_positives], gt_preds[picked_negatives] ], dim=0)
+    p_preds = torch.cat([ p_preds[picked_positives], p_preds[picked_negatives] ], dim=0)
+
+    p_regs = p_regs[picked_positives]
+    # TODO convert gt boxes to gt offsets
+    gt_regs = targets['boxes'][matched_gt_indexes][picked_positives]
+    gt_regs = xyxy2offsets(gt_regs, default_boxes[picked_positives], img)
+
+    return (p_preds,gt_preds),(p_regs,gt_regs)
+
+
+def xyxy2offsets(boxes, anchors, img):
+    """Convert boxes to offsets
+
+    Args:
+        boxes ([type]): [description]
     """
-        positives: nA x fmap_h x fmap_w
-        negatives: nA x fmap_h x fmap_w
-    """
-    nA,fh,fw = positives.shape
+    if img is not None:
+        for box,anchor in zip(boxes,anchors):
+            box = box.long().cpu().numpy()
+            anchor = anchor.long().cpu().numpy()
+            c_img = img.copy()
+            c_img = cv2.rectangle(c_img, (box[0],box[1]), (box[2],box[3]), (0,255,0), 2)
+            c_img = cv2.rectangle(c_img, (anchor[0],anchor[1]), (anchor[2],anchor[3]), (0,0,255), 2)
+            print(box,anchor)
+            cv2.imshow("",c_img)
+            cv2.waitKey(0)
 
-    s_positives = torch.zeros(*(positives.reshape(-1).size(0),), dtype=positives.dtype, device=positives.device)
-    s_negatives = torch.zeros(*(negatives.reshape(-1).size(0),), dtype=negatives.dtype, device=negatives.device)
+    c_boxes = xyxy2cxcywh(boxes)
+    c_anchors = xyxy2cxcywh(anchors)
 
-    pos_population, = torch.where(positives.reshape(-1))
-    positive_count = min(pos_population.size(0),positive_count)
-    pick_positives = np.random.choice(pos_population.cpu().numpy(), size=positive_count, replace=False)
-    s_positives[pick_positives] = True
+    tx = (c_boxes[:, 0] - c_anchors[:, 0]) / c_anchors[:, 2]
+    ty = (c_boxes[:, 1] - c_anchors[:, 1]) / c_anchors[:, 3]
+    tw = torch.log( c_boxes[:, 2] / c_anchors[:, 2] )
+    th = torch.log( c_boxes[:, 3] / c_anchors[:, 3] )
 
-    neg_population, = torch.where(negatives.reshape(-1))
-    negative_count = total_count-positive_count
-    pick_negatives = np.random.choice(neg_population.cpu().numpy(), size=negative_count, replace=False)
-    s_negatives[pick_negatives] = True
-
-    s_positives = s_positives.reshape(nA,fh,fw)
-    s_negatives = s_negatives.reshape(nA,fh,fw)
-
-    return s_positives,s_negatives
+    return torch.stack([tx,ty,tw,th], dim=-1)

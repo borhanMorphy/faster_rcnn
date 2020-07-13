@@ -10,14 +10,14 @@ from utils.box import (
     generate_default_boxes,
     apply_box_regressions,
     clip_boxes,
-    ignore_boxes
+    get_ignore_boxes
 )
 
 from utils.train import (
-    assign_targets,
-    sample_positive_and_negatives
+    build_targets
 )
 from utils.data import load_data
+
 
 class DetectionLayer(nn.Module):
     def __init__(self, effective_stride:int=16,
@@ -56,15 +56,15 @@ class DetectionLayer(nn.Module):
 
         if preds.device != self.default_boxes.device:
             self.default_boxes = self.default_boxes.to(preds.device)
-        
+
         return preds,regs
 
-    def _inference_postprocess(self, preds:torch.Tensor, regs:torch.Tensor, img_dims:Tuple):
+    def _inference_postprocess(self, preds:torch.Tensor, regs:torch.Tensor, img_dims:torch.Tensor):
         """
         Arguments:
             preds: bs x nA x fmap_h x fmap_w x 2
             regs:  bs x nA x fmap_h x fmap_w x 4
-            img_dims: (height,width)
+            img_dims: torch.tensor(height,width)
         """
         bs = preds.size(0)
 
@@ -121,7 +121,6 @@ class RPN(nn.Module):
 
         self.debug = True
 
-
     def forward(self, fmap:torch.Tensor):
         output = self.base_conv_layer(fmap)
 
@@ -134,22 +133,21 @@ class RPN(nn.Module):
         # preds: bs x nA x fmap_h x fmap_w x 2
         # regs: bs x nA x fmap_h x fmap_w x 4
         preds,regs = self.forward(batch)
-        bs,nA,fmap_h,fmap_w,_ = preds.shape
+        bs = preds.size(0)
 
         for i in range(bs):
-            # TODO ignore default boxes that exceeds
-            p_mask,n_mask = assign_targets(preds[i],
-                self.detection_layer.default_boxes,
-                targets[i]['boxes'])
-            
-            p_mask,n_mask = sample_positive_and_negatives(p_mask,n_mask)
 
-            p_boxes = self.detection_layer.default_boxes.reshape(nA,fmap_h,fmap_w,4)[p_mask,:]
-            
+            ignore_indexes = get_ignore_boxes(self.detection_layer.default_boxes, img_dims=targets[i]['img_dims'])
+            (p_preds,gt_preds),(p_regs,gt_regs) = build_targets(preds[i], regs[i],
+                self.detection_layer.default_boxes,
+                targets[i], ignore_indexes=ignore_indexes, img=imgs[i])
+
+            """
             if self.debug:
+                p_boxes = self.detection_layer.default_boxes.reshape(nA,fmap_h,fmap_w,4)[p_mask,:]
                 # c,h,w => h,w,c
                 img = imgs[i].copy()
-                
+
                 for x1,y1,x2,y2 in targets[i]['boxes'].cpu().long().numpy().tolist():
                     img = cv2.rectangle(img,(x1,y1),(x2,y2),(0,255,0),2)
 
@@ -157,9 +155,11 @@ class RPN(nn.Module):
                     c_img = cv2.rectangle(img.copy(),(x1,y1),(x2,y2),(0,0,255),2)
                     cv2.imshow("",c_img)
                     cv2.waitKey(0)
+            """
 
+            # TODO calculate loss functions
+            cls_loss = F.binary_cross_entropy_with_logits(p_preds[i][p_mask], t_preds[i][p_mask])
 
-            
 
 if __name__ == "__main__":
     import torchvision.models as models

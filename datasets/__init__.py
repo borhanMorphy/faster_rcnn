@@ -27,5 +27,3 @@ def factory(dataset_name:str, **configs):
     kwargs.update(configs)
 
     return cls(*args,**kwargs)
-    
-    

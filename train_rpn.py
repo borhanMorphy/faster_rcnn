@@ -30,13 +30,16 @@ class TrainTransforms():
         if 'classes' in targets:
             targets['classes'] = torch.from_numpy(targets['classes'])
 
+        if 'img_dim' in targets:
+            targets['img_dim'] = torch.from_numpy(targets['img_dim'])
+
         return data,targets
 
 def main(dataset_name:str):
     train_transforms = TrainTransforms()
 
     debug = True
-    ds = ds_factory(dataset_name, transforms=train_transforms)
+    ds = ds_factory(dataset_name, transforms=train_transforms, download=True)
     dl = generate_dl(ds)
 
     backbone = models.vgg16(pretrained=True).features[:-1]

@@ -138,7 +138,7 @@ def intersect(box_a:torch.Tensor, box_b:torch.Tensor) -> torch.Tensor:
     inter = torch.clamp((max_xy - min_xy), min=0)
     return inter[:, :, 0] * inter[:, :, 1]
 
-def clip_boxes(c_boxes:torch.Tensor, img_dims:Tuple):
+def clip_boxes(c_boxes:torch.Tensor, img_dims:torch.Tensor):
     """Clips boxes that exceeds image region
 
     Params:
@@ -154,30 +154,28 @@ def clip_boxes(c_boxes:torch.Tensor, img_dims:Tuple):
 
     return boxes
 
-def ignore_boxes(c_boxes:torch.Tensor, img_dims:Tuple):
+def get_ignore_boxes(c_boxes:torch.Tensor, img_dims:Tuple):
     # TODO
     """Ignore boxes that exceeds image region
 
     Params:
-        boxes: bs x N x 4 as xmin ymin xmax ymax
+        boxes: N x 4 as xmin ymin xmax ymax
         img_dims: image height, image width
     Returns:
-        ignore_mask:
+        ignore_indexes: (N',)
     """
     h,w = img_dims
-    bs,N,_ = c_boxes.shape
+    N,_ = c_boxes.shape
 
-    igore_boxes = torch.zeros(*(bs,N), dtype=c_boxes.dtype, device=c_boxes.device)
+    igore_boxes_mask = torch.zeros(*(N,), dtype=torch.bool, device=c_boxes.device)
 
-    x1i, = torch.where(c_boxes[..., 0] < 0)
-    y1i, = torch.where(c_boxes[..., 1] < 0)
-    x2i, = torch.where(c_boxes[..., 2] > w)
-    y2i, = torch.where(c_boxes[..., 3] > h)
-
-    print(x1i,x1i.shape);exit(0)
-
-    return c_boxes
-
+    mask1 = c_boxes[:, 0] < 0
+    mask2 = c_boxes[:, 1] < 0
+    mask3 = c_boxes[:, 2] > w
+    mask4 = c_boxes[:, 3] > h
+    igore_boxes_mask[mask1 | mask2 | mask3 | mask4] = True
+    ignore_box_indexes, = torch.where(igore_boxes_mask)
+    return ignore_box_indexes
 
 if __name__ == "__main__":
     from cv2 import cv2

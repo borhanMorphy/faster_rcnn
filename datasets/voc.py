@@ -26,8 +26,10 @@ class VOCDataset(VOCDetection):
         img = np.array(img) # convert PIL image => RGB numpy array
         targets = {
             'boxes':[],
-            'classes':[]
+            'classes':[],
+            'img_dims':None
         }
+        img_size = (int(otargets['annotation']['size']['height']), int(otargets['annotation']['size']['width']))
         for target in otargets['annotation']['object']:
             if target['name'] not in self._label_mapper: continue
 
@@ -39,6 +41,8 @@ class VOCDataset(VOCDetection):
 
         targets['boxes'] = np.array(targets['boxes'], dtype=np.float32)
         targets['classes'] = np.array(targets['classes'], dtype=np.int32)
+        targets['img_dims'] = np.array(img_size, dtype=np.int32)
+
 
         if self._transforms is not None:
             img,targets = self._transforms(img, targets=targets)
