@@ -3,14 +3,20 @@ from typing import Dict,List,Tuple
 import torch
 from torchvision.ops import nms
 import torch.nn.functional as F
+from cv2 import cv2
 
 from utils.box import (
     generate_anchors,
     generate_default_boxes,
     apply_box_regressions,
-    clip_boxes
+    clip_boxes,
+    ignore_boxes
 )
 
+from utils.train import (
+    assign_targets,
+    sample_positive_and_negatives
+)
 from utils.data import load_data
 
 class DetectionLayer(nn.Module):
@@ -31,36 +37,41 @@ class DetectionLayer(nn.Module):
         self.default_boxes = generate_default_boxes(
             self.anchors, (self._fh, self._fw), self.effective_stride)
 
-    def forward(self, preds:torch.Tensor, regs:torch.Tensor, img_dims:Tuple=None,
-            targets:Dict=None) -> List[torch.Tensor]:
+    def forward(self, preds:torch.Tensor, regs:torch.Tensor) -> List[torch.Tensor]:
 
-        fh,fw = preds.size(2),preds.size(3)
+        bs,_,fh,fw = preds.shape
+        # bs x num_anchors*2 x fmap_h x fmap_w => bs x 2 x nA x fmap_h x fmap_w => bs x nA x fmap_h x fmap_w x 2
+        preds = preds.reshape(bs,2,-1,fh,fw).permute(0,2,3,4,1).contiguous()
+
+        # bs x num_anchors*4 x fmap_h x fmap_w => bs x 4 x nA x fmap_h x fmap_w => bs x nA x fmap_h x fmap_w x 4
+        regs = regs.reshape(bs,4,-1,fh,fw).permute(0,2,3,4,1).contiguous()
 
         if fw != self._fw or fh != self._fh:
             # re-generate default boxes if feature map size is changed
             self._fw = fw
             self._fh = fh
-            self.default_boxes = generate_default_boxes(
+            self.default_boxes = generate_default_boxes( # nA x (fmap_h * fmap_w) x 4 as xmin ymin xmax ymax
                 self.anchors, (self._fh, self._fw),
                 self.effective_stride, device=preds.device)
 
         if preds.device != self.default_boxes.device:
             self.default_boxes = self.default_boxes.to(preds.device)
-
-        if targets is None:
-            return self._inference_postprocess(preds,regs,img_dims)
-        else:
-            pass
+        
+        return preds,regs
 
     def _inference_postprocess(self, preds:torch.Tensor, regs:torch.Tensor, img_dims:Tuple):
+        """
+        Arguments:
+            preds: bs x nA x fmap_h x fmap_w x 2
+            regs:  bs x nA x fmap_h x fmap_w x 4
+            img_dims: (height,width)
+        """
         bs = preds.size(0)
-        # bs x num_anchors*2 x fmap_h x fmap_w => bs x N x 2
-        preds = preds.reshape(bs,2,-1).permute(0,2,1).contiguous()
-        scores = F.softmax(preds, dim=-1)[:,:,1]
 
-        # bs x num_anchors*4 x fmap_h x fmap_w => bs x N x 4
-        regs = regs.reshape(bs,4,-1).permute(0,2,1).contiguous()
+        # bs x nA x fmap_h x fmap_w x 4 => bs x N
+        scores = F.softmax(preds.reshape(bs,-1,2), dim=-1)[:,:,1]
 
+        # bs x nA x fmap_h x fmap_w x 4 => bs x N x 4
         boxes = apply_box_regressions(self.default_boxes, regs)
 
         boxes = clip_boxes(boxes, img_dims)
@@ -75,6 +86,7 @@ class DetectionLayer(nn.Module):
             det_results.append(bboxes)
 
         return det_results
+
 
 class RPN(nn.Module):
     """Input features represents vgg16 backbone and n=3 is set because of the `faster rcnn` parper
@@ -107,15 +119,47 @@ class RPN(nn.Module):
         self.detection_layer = DetectionLayer(effective_stride=effective_stride,
             anchor_ratios=anchor_ratios, anchor_scales=anchor_scales)
 
+        self.debug = True
 
-    def forward(self, fmap:torch.Tensor, img_dims:Tuple=None, targets:Dict=None):
+
+    def forward(self, fmap:torch.Tensor):
         output = self.base_conv_layer(fmap)
 
         preds = self.cls_conv_layer(output)
         regs = self.reg_conv_layer(output)
 
-        return self.detection_layer(preds,regs, img_dims=img_dims, targets=targets)
+        return self.detection_layer(preds,regs)
 
+    def training_step(self, batch, targets, imgs:List=None):
+        # preds: bs x nA x fmap_h x fmap_w x 2
+        # regs: bs x nA x fmap_h x fmap_w x 4
+        preds,regs = self.forward(batch)
+        bs,nA,fmap_h,fmap_w,_ = preds.shape
+
+        for i in range(bs):
+            # TODO ignore default boxes that exceeds
+            p_mask,n_mask = assign_targets(preds[i],
+                self.detection_layer.default_boxes,
+                targets[i]['boxes'])
+            
+            p_mask,n_mask = sample_positive_and_negatives(p_mask,n_mask)
+
+            p_boxes = self.detection_layer.default_boxes.reshape(nA,fmap_h,fmap_w,4)[p_mask,:]
+            
+            if self.debug:
+                # c,h,w => h,w,c
+                img = imgs[i].copy()
+                
+                for x1,y1,x2,y2 in targets[i]['boxes'].cpu().long().numpy().tolist():
+                    img = cv2.rectangle(img,(x1,y1),(x2,y2),(0,255,0),2)
+
+                for x1,y1,x2,y2 in p_boxes.cpu().long().numpy().tolist():
+                    c_img = cv2.rectangle(img.copy(),(x1,y1),(x2,y2),(0,0,255),2)
+                    cv2.imshow("",c_img)
+                    cv2.waitKey(0)
+
+
+            
 
 if __name__ == "__main__":
     import torchvision.models as models

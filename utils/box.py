@@ -12,7 +12,7 @@ def generate_default_boxes(anchors, fmap_dims,
     dboxes = anchors.repeat(h*w,1,1).permute(1,0,2)
     dboxes[:,:,:2] += grids
     dboxes[:,:,2:] += grids
-    return dboxes
+    return dboxes.reshape(-1,4)
 
 def generate_anchors(effective_stride:int, ratios:List=[0.5,1,2],
         scales:List=[0.5,1,2], dtype=torch.float32, device:str='cpu'):
@@ -154,7 +154,29 @@ def clip_boxes(c_boxes:torch.Tensor, img_dims:Tuple):
 
     return boxes
 
+def ignore_boxes(c_boxes:torch.Tensor, img_dims:Tuple):
+    # TODO
+    """Ignore boxes that exceeds image region
 
+    Params:
+        boxes: bs x N x 4 as xmin ymin xmax ymax
+        img_dims: image height, image width
+    Returns:
+        ignore_mask:
+    """
+    h,w = img_dims
+    bs,N,_ = c_boxes.shape
+
+    igore_boxes = torch.zeros(*(bs,N), dtype=c_boxes.dtype, device=c_boxes.device)
+
+    x1i, = torch.where(c_boxes[..., 0] < 0)
+    y1i, = torch.where(c_boxes[..., 1] < 0)
+    x2i, = torch.where(c_boxes[..., 2] > w)
+    y2i, = torch.where(c_boxes[..., 3] > h)
+
+    print(x1i,x1i.shape);exit(0)
+
+    return c_boxes
 
 
 if __name__ == "__main__":
