@@ -5,7 +5,7 @@ import numpy as np
 from cv2 import cv2
 
 def build_targets(preds:torch.Tensor, regs:torch.Tensor, default_boxes:torch.Tensor, gt_boxes:torch.Tensor, gt_classes:torch.Tensor,
-        negative_iou_threshold:float=0.3, positive_iou_threshold:float=0.7, ignore_indexes:torch.Tensor=None, img=None):
+        negative_iou_threshold:float=0.3, positive_iou_threshold:float=0.7, ignore_indexes:torch.Tensor=None):
     """[summary]
 
     Args:
@@ -23,8 +23,10 @@ def build_targets(preds:torch.Tensor, regs:torch.Tensor, default_boxes:torch.Ten
     """
     nA,Gy,Gx,_ = preds.shape
 
-    p_preds = preds.reshape(-1,2)
-    gt_preds = torch.zeros(*(nA*Gy*Gx,), dtype=preds.dtype, device=preds.device)
+    p_pos_preds = preds.reshape(-1,2)[:, 1]
+    p_neg_preds = preds.reshape(-1,2)[:, 0]
+    gt_pos_preds = torch.zeros(*(nA*Gy*Gx,), dtype=preds.dtype, device=preds.device)
+    gt_neg_preds = torch.zeros(*(nA*Gy*Gx,), dtype=preds.dtype, device=preds.device)
 
     p_regs = regs.reshape(-1,4)
 
@@ -50,8 +52,8 @@ def build_targets(preds:torch.Tensor, regs:torch.Tensor, default_boxes:torch.Ten
         positives_mask[ignore_indexes] = False
         negatives_mask[ignore_indexes] = False
 
-    gt_preds[positives_mask] = 1.
-    gt_preds[negatives_mask] = 0
+    gt_pos_preds[positives_mask] = 1.
+    gt_neg_preds[negatives_mask] = 1.
 
     # resample positives and negatives as 128:128
     positives, = torch.where(positives_mask)
@@ -63,22 +65,24 @@ def build_targets(preds:torch.Tensor, regs:torch.Tensor, default_boxes:torch.Ten
     picked_negatives = np.random.choice(negatives.cpu().numpy(), size=negative_count, replace=False)
     ##################################################
 
-    gt_preds = torch.cat([ gt_preds[picked_positives], gt_preds[picked_negatives] ], dim=0)
-    p_preds = torch.cat([ p_preds[picked_positives], p_preds[picked_negatives] ], dim=0)
-
     p_regs = p_regs[picked_positives]
     # TODO convert gt boxes to gt offsets
     gt_regs = gt_boxes[matched_gt_indexes][picked_positives]
-    gt_regs = xyxy2offsets(gt_regs, default_boxes[picked_positives], img)
+    gt_regs = xyxy2offsets(gt_regs, default_boxes[picked_positives])
 
-    return (p_preds,gt_preds),(p_regs,gt_regs)
+    targets = []
+    targets.append( (p_pos_preds[picked_positives], gt_pos_preds[picked_positives]) )
+    targets.append( (p_neg_preds[picked_negatives], gt_neg_preds[picked_negatives]) )
+    targets.append( (p_regs,gt_regs) )
+    return targets
 
 
-def xyxy2offsets(boxes, anchors, img):
+def xyxy2offsets(boxes, anchors):
     """Convert boxes to offsets
 
     Args:
         boxes ([type]): [description]
+    """
     """
     if img is not None:
         for box,anchor in zip(boxes,anchors):
@@ -90,7 +94,7 @@ def xyxy2offsets(boxes, anchors, img):
             print(box,anchor)
             cv2.imshow("",c_img)
             cv2.waitKey(0)
-
+    """
     c_boxes = xyxy2cxcywh(boxes)
     c_anchors = xyxy2cxcywh(anchors)
 

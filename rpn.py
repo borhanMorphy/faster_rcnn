@@ -22,11 +22,12 @@ from utils.data import load_data
 class DetectionLayer(nn.Module):
     def __init__(self, effective_stride:int=16,
             anchor_scales:List=[0.5,1,2], anchor_ratios:List=[0.5,1,2],
-            iou_threshold:float=0.7, keep_n:int=300):
+            conf_threshold:float=0.5, iou_threshold:float=0.7, keep_n:int=300):
         super(DetectionLayer,self).__init__()
 
         self.effective_stride = effective_stride
         self.iou_threshold = iou_threshold
+        self.conf_threshold = conf_threshold
         self.keep_n = keep_n
 
         self.anchors = generate_anchors(self.effective_stride,
@@ -48,7 +49,7 @@ class DetectionLayer(nn.Module):
 
         if preds.device != self.anchors.device:
             self.anchors = self.anchors.to(preds.device)
-            
+
         if fw != self._fw or fh != self._fh:
             # re-generate default boxes if feature map size is changed
             self._fw = fw
@@ -73,7 +74,7 @@ class DetectionLayer(nn.Module):
         scores = F.softmax(preds.reshape(bs,-1,2), dim=-1)[:,:,1]
 
         # bs x nA x fmap_h x fmap_w x 4 => bs x N x 4
-        boxes = apply_box_regressions(self.default_boxes, regs)
+        boxes = apply_box_regressions(self.default_boxes, regs.reshape(bs,-1,4))
 
         boxes = clip_boxes(boxes, img_dims)
 
@@ -84,7 +85,8 @@ class DetectionLayer(nn.Module):
             sc = scores[i,pick]
             sort = sc.argsort(descending=True)
             bboxes = torch.cat([bb[sort][:self.keep_n], sc[sort][:self.keep_n].unsqueeze(-1)],dim=1)
-            det_results.append(bboxes)
+            pick = bboxes[:,4] > self.conf_threshold
+            det_results.append(bboxes[pick,:])
 
         return det_results
 
@@ -95,7 +97,8 @@ class RPN(nn.Module):
     Number of anchors selected from paper, where num_anchors: num_scales * num_ratios
     """
     def __init__(self, backbone, features:int=512, n:int=3, effective_stride:int=16,
-            anchor_scales:List=[0.5,1,2], anchor_ratios:List=[0.5,1,2]):
+            anchor_scales:List=[0.5,1,2], anchor_ratios:List=[0.5,1,2],
+            conf_threshold:float=0.5, iou_threshold:float=0.7, keep_n:int=300):
         super(RPN,self).__init__()
 
         self.backbone = backbone
@@ -120,7 +123,8 @@ class RPN(nn.Module):
             kernel_size=1, stride=1, padding=0)
 
         self.detection_layer = DetectionLayer(effective_stride=effective_stride,
-            anchor_ratios=anchor_ratios, anchor_scales=anchor_scales)
+            anchor_ratios=anchor_ratios, anchor_scales=anchor_scales,
+            conf_threshold=conf_threshold, iou_threshold=iou_threshold, keep_n=keep_n)
 
         self.debug = True
 
@@ -133,14 +137,18 @@ class RPN(nn.Module):
 
         return self.detection_layer(preds,regs)
 
-    def training_step(self, batch, targets, imgs:List=None):
+    def training_step(self, batch, targets):
         # preds: bs x nA x fmap_h x fmap_w x 2
         # regs: bs x nA x fmap_h x fmap_w x 4
 
         preds,regs = self.forward(batch)
         bs = preds.size(0)
 
-        total_loss = 0
+        metrics = {
+            'loss':0,
+            'reg_loss':0,
+            'cls_loss':0
+        }
 
         for i in range(bs):
             img_dims = targets[i]["img_dims"].cuda()
@@ -148,42 +156,40 @@ class RPN(nn.Module):
             gt_classes = targets[i]["classes"].cuda()
 
             ignore_indexes = get_ignore_boxes(self.detection_layer.default_boxes, img_dims=img_dims)
-            (p_preds,gt_preds),(p_regs,gt_regs) = build_targets(preds[i], regs[i],
+            b_targets = build_targets(preds[i], regs[i],
                 self.detection_layer.default_boxes, gt_boxes, gt_classes,
-                ignore_indexes=ignore_indexes, img=imgs[i])
+                ignore_indexes=ignore_indexes)
 
-            """
-            if self.debug:
-                p_boxes = self.detection_layer.default_boxes.reshape(nA,fmap_h,fmap_w,4)[p_mask,:]
-                # c,h,w => h,w,c
-                img = imgs[i].copy()
+            p_pos_preds,gt_pos_preds = b_targets[0]
+            p_neg_preds,gt_neg_preds = b_targets[1]
+            p_regs,gt_regs = b_targets[2]
 
-                for x1,y1,x2,y2 in targets[i]['boxes'].cpu().long().numpy().tolist():
-                    img = cv2.rectangle(img,(x1,y1),(x2,y2),(0,255,0),2)
+            cls_loss = (F.binary_cross_entropy_with_logits(p_pos_preds, gt_pos_preds, reduction='sum') +\
+                F.binary_cross_entropy_with_logits(p_neg_preds, gt_neg_preds, reduction='sum')) / 2
 
-                for x1,y1,x2,y2 in p_boxes.cpu().long().numpy().tolist():
-                    c_img = cv2.rectangle(img.copy(),(x1,y1),(x2,y2),(0,0,255),2)
-                    cv2.imshow("",c_img)
-                    cv2.waitKey(0)
-            """
-
-            cls_loss = F.binary_cross_entropy_with_logits(p_preds[:,0], gt_preds, reduction='sum')
-
-            reg_loss = F.mse_loss(p_regs[:,0],gt_regs[:,0], reduction='sum') + \
-                F.mse_loss(p_regs[:,1],gt_regs[:,1], reduction='sum') + \
-                    F.mse_loss(p_regs[:,2],gt_regs[:,2], reduction='sum') + \
-                        F.mse_loss(p_regs[:,3],gt_regs[:,3], reduction='sum')
+            reg_loss = F.smooth_l1_loss(p_regs[:,0],gt_regs[:,0], reduction='sum') + \
+                F.smooth_l1_loss(p_regs[:,1],gt_regs[:,1], reduction='sum') + \
+                    F.smooth_l1_loss(p_regs[:,2],gt_regs[:,2], reduction='sum') + \
+                        F.smooth_l1_loss(p_regs[:,3],gt_regs[:,3], reduction='sum')
 
             Ncls = 256
             Nreg = 2400
             w_lamda = 10
 
-            total_loss += cls_loss/Ncls + (w_lamda*reg_loss)/Nreg
+            metrics['loss'] += (cls_loss/Ncls + (w_lamda*reg_loss)/Nreg)
+            metrics['cls_loss'] += (cls_loss.item() / Ncls)
+            metrics['reg_loss'] += ((w_lamda*reg_loss.item()) / Nreg)
 
-        return total_loss
+        return metrics
 
+    def test_step(self, batch, targets):
+        # preds: bs x nA x fmap_h x fmap_w x 2
+        # regs: bs x nA x fmap_h x fmap_w x 4
 
+        preds,regs = self.forward(batch)
+        # TODO handle batch
 
+        return self.detection_layer._inference_postprocess(preds,regs,targets[0]['img_dims'].to(preds.device))
 
 if __name__ == "__main__":
     import torchvision.models as models

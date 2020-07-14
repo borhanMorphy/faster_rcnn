@@ -53,7 +53,7 @@ def _anchor2vector(anchors:torch.Tensor):
 
 def apply_box_regressions(default_boxes:torch.Tensor, regs:torch.Tensor) -> torch.Tensor:
     """
-        default_boxes: 
+        default_boxes:
         regs: bs x N x 4
 
         returns:

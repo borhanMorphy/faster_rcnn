@@ -8,6 +8,7 @@ from tqdm import tqdm
 from torch.utils.data import DataLoader
 from typing import Dict
 import torch.nn.functional as F
+from utils.metrics import caclulate_means
 
 def custom_collate_fn(batch):
     batch,targets = zip(*batch)
@@ -29,7 +30,7 @@ class TrainTransforms():
         h = data.size(2)
         w = data.size(3)
         scale_factor = 600 / min(h,w)
-        data = F.interpolate(data, scale_factor=scale_factor, mode='bilinear', align_corners=False)
+        data = F.interpolate(data, scale_factor=scale_factor, mode='bilinear', align_corners=False, recompute_scale_factor=False)
 
         if 'boxes' in targets:
             targets['boxes'] = torch.from_numpy(targets['boxes']) * scale_factor
@@ -42,13 +43,30 @@ class TrainTransforms():
 
         return data,targets
 
+def reduce_dataset(ds,ratio=0.1):
+    size = int(len(ds)*ratio)
+    rest = len(ds)-size
+    return torch.utils.data.random_split(ds, [size,rest])[0]
 
-def main(dataset_name:str):
+def main():
     train_transforms = TrainTransforms()
 
-    debug = False
-    ds = ds_factory(dataset_name, transforms=train_transforms, download=True)
-    dl = generate_dl(ds)
+    debug = False # TODO add debug
+    batch_size = 1
+    epochs = 1
+
+    # !defined in the paper
+    learning_rate = 1e-3
+    momentum = 0.9
+    weight_decay = 5e-4
+    total_iter_size = 60000
+
+    ds_train = ds_factory("VOC_train", transforms=train_transforms)
+    dl_train = generate_dl(ds_train,batch_size=batch_size)
+
+    ds_val = ds_factory("VOC_val", transforms=train_transforms)
+    ds_val = reduce_dataset(ds_val,ratio=0.1)
+    dl_val = generate_dl(ds_val,batch_size=batch_size)
 
     backbone = models.vgg16(pretrained=True).features[:-1]
 
@@ -56,25 +74,57 @@ def main(dataset_name:str):
     rpn.debug = debug
     rpn.to('cuda')
 
-    running_loss = 0
-    rep_count = 10
-    optimizer = torch.optim.SGD(rpn.parameters(), lr=1e-3, momentum=0.9, weight_decay=5e-4)
-    for iter_count,(batch,targets) in enumerate(dl):
-        if debug:
-            imgs = [(b*255).long().permute(1,2,0).numpy().astype(np.uint8) for b in batch]
-        else:
-            imgs = [None] * batch.size(0)
+    verbose = 100
+    optimizer = torch.optim.SGD(rpn.parameters(), lr=learning_rate,
+        momentum=momentum, weight_decay=weight_decay)
 
-        optimizer.zero_grad()
-        loss = rpn.training_step(batch.cuda(), targets, imgs=imgs)
-        loss.backward()
-        optimizer.step()
+    max_iter_count = int(len(ds_train)/batch_size)
+    # ! set because of the paper
+    epochs = int(total_iter_size / max_iter_count)
 
-        running_loss += loss.item()
+    for epoch in range(epochs):
+        running_metrics = []
+        print(f"running epoch [{epoch+1}/{epochs}]")
+        rpn.train()
+        for iter_count,(batch,targets) in enumerate(dl_train):
 
-        if (iter_count+1) % rep_count == 0:
-            print("loss: ",running_loss/rep_count)
-            running_loss = 0
+            optimizer.zero_grad()
+            metrics = rpn.training_step(batch.cuda(), targets)
+            metrics['loss'].backward()
+            optimizer.step()
+
+            metrics['loss'] = metrics['loss'].item()
+
+            running_metrics.append(metrics)
+            if (iter_count+1) % verbose == 0:
+                means = caclulate_means(running_metrics)
+                running_metrics = []
+                log = []
+                for k,v in means.items():
+                    log.append(f"{k}: {v:.04f}")
+                log = "\t".join(log)
+                log += f"\titer[{iter_count}/{max_iter_count}]"
+                print(log)
+
+        torch.save(rpn.state_dict(), f"./rpn_epoch_{epoch+1}.pth")
+
+        # start validation
+        running_metrics = []
+        total_val_iter = int(len(ds_val) / batch_size)
+        rpn.eval()
+        print("running validation...")
+        for batch,targets in tqdm(dl_val, total=total_val_iter):
+            with torch.no_grad():
+                metrics = rpn.training_step(batch.cuda(), targets)
+            metrics['loss'] = metrics['loss'].item()
+            running_metrics.append(metrics)
+
+        means = caclulate_means(running_metrics)
+        log = []
+        for k,v in means.items():
+            log.append(f"{k}: {v:.04f}")
+        log = "\t".join(log)
+        print(f"validation results for epoch {epoch+1} is: {log}")
 
 if __name__ == "__main__":
-    main("VOC_train")
+    main()
