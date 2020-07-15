@@ -41,11 +41,11 @@ class DetectionLayer(nn.Module):
     def forward(self, preds:torch.Tensor, regs:torch.Tensor) -> List[torch.Tensor]:
 
         bs,_,fh,fw = preds.shape
-        # bs x num_anchors*2 x fmap_h x fmap_w => bs x 2 x nA x fmap_h x fmap_w => bs x nA x fmap_h x fmap_w x 2
-        preds = preds.reshape(bs,2,-1,fh,fw).permute(0,2,3,4,1).contiguous()
+        # bs x num_anchors*2 x fmap_h x fmap_w => bs x fmap_h x fmap_w x (num_anchors*2) => bs x N x 2
+        preds = preds.permute(0,2,3,1).reshape(bs,-1,2).contiguous()
 
-        # bs x num_anchors*4 x fmap_h x fmap_w => bs x 4 x nA x fmap_h x fmap_w => bs x nA x fmap_h x fmap_w x 4
-        regs = regs.reshape(bs,4,-1,fh,fw).permute(0,2,3,4,1).contiguous()
+        # bs x num_anchors*4 x fmap_h x fmap_w => bs x fmap_h x fmap_w x (num_anchors*4) => bs x N x 4
+        regs = regs.permute(0,2,3,1).reshape(bs,-1,4).contiguous()
 
         if preds.device != self.anchors.device:
             self.anchors = self.anchors.to(preds.device)
@@ -57,36 +57,39 @@ class DetectionLayer(nn.Module):
             self.default_boxes = generate_default_boxes( # nA x (fmap_h * fmap_w) x 4 as xmin ymin xmax ymax
                 self.anchors, (self._fh, self._fw),
                 self.effective_stride, device=preds.device)
-
-
         return preds,regs
 
     def _inference_postprocess(self, preds:torch.Tensor, regs:torch.Tensor, img_dims:torch.Tensor):
         """
         Arguments:
-            preds: bs x nA x fmap_h x fmap_w x 2
-            regs:  bs x nA x fmap_h x fmap_w x 4
+            preds: bs x (fmap_h * fmap_w * nA)  x 2
+            regs:  bs x (fmap_h * fmap_w * nA)  x 4
             img_dims: torch.tensor(height,width)
         """
         bs = preds.size(0)
 
-        # bs x nA x fmap_h x fmap_w x 4 => bs x N
-        scores = F.softmax(preds.reshape(bs,-1,2), dim=-1)[:,:,1]
+        # bs x N x 2 => bs x N
+        scores = F.softmax(preds, dim=-1)[:,:,1]
 
-        # bs x nA x fmap_h x fmap_w x 4 => bs x N x 4
-        boxes = apply_box_regressions(self.default_boxes, regs.reshape(bs,-1,4))
+
+        # bs x N x 4
+        # ! here is something wrong
+        boxes = apply_box_regressions(self.default_boxes, regs)
 
         boxes = clip_boxes(boxes, img_dims)
 
         det_results = []
         for i in range(bs):
-            pick = nms(boxes[i], scores[i], self.iou_threshold)
-            bb = boxes[i,pick,:]
-            sc = scores[i,pick]
-            sort = sc.argsort(descending=True)
-            bboxes = torch.cat([bb[sort][:self.keep_n], sc[sort][:self.keep_n].unsqueeze(-1)],dim=1)
-            pick = bboxes[:,4] > self.conf_threshold
-            det_results.append(bboxes[pick,:])
+            sort = scores[i].argsort(dim=-1, descending=True)
+            proposals = boxes[i][sort][:6000,:]
+            sc = scores[i][sort]
+            pick = nms(proposals, sc, self.iou_threshold)
+
+            proposals = proposals[pick]
+            sc = sc[pick]
+            proposals = torch.cat([proposals[:self.keep_n], sc[:self.keep_n].unsqueeze(-1)],dim=1)
+            pick = proposals[:,4] > self.conf_threshold
+            det_results.append(proposals[pick,:])
 
         return det_results
 
@@ -156,16 +159,12 @@ class RPN(nn.Module):
             gt_classes = targets[i]["classes"].cuda()
 
             ignore_indexes = get_ignore_boxes(self.detection_layer.default_boxes, img_dims=img_dims)
-            b_targets = build_targets(preds[i], regs[i],
+            (p_preds,gt_preds),(p_regs,gt_regs) = build_targets(preds[i], regs[i],
                 self.detection_layer.default_boxes, gt_boxes, gt_classes,
                 ignore_indexes=ignore_indexes)
 
-            p_pos_preds,gt_pos_preds = b_targets[0]
-            p_neg_preds,gt_neg_preds = b_targets[1]
-            p_regs,gt_regs = b_targets[2]
 
-            cls_loss = (F.binary_cross_entropy_with_logits(p_pos_preds, gt_pos_preds, reduction='sum') +\
-                F.binary_cross_entropy_with_logits(p_neg_preds, gt_neg_preds, reduction='sum')) / 2
+            cls_loss = F.cross_entropy(p_preds, gt_preds, reduction='sum')
 
             reg_loss = F.smooth_l1_loss(p_regs[:,0],gt_regs[:,0], reduction='sum') + \
                 F.smooth_l1_loss(p_regs[:,1],gt_regs[:,1], reduction='sum') + \

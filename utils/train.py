@@ -9,8 +9,8 @@ def build_targets(preds:torch.Tensor, regs:torch.Tensor, default_boxes:torch.Ten
     """[summary]
 
     Args:
-        preds (torch.Tensor): nA x Gy x Gx x 2
-        regs (torch.Tensor): nA x Gy x Gx x 4
+        preds (torch.Tensor): N x 2
+        regs (torch.Tensor): N x 4
         default_boxes (torch.Tensor): (nA * Gy * Gx) x 4
         negative_iou_threshold (float, optional): [description]. Defaults to 0.3.
         positive_iou_threshold (float, optional): [description]. Defaults to 0.7.
@@ -21,14 +21,12 @@ def build_targets(preds:torch.Tensor, regs:torch.Tensor, default_boxes:torch.Ten
         p_regs.shape(Nr,4) == gt_regs.shape(Nr,4) # as (tx,ty,tw,th)
         (p_preds,gt_preds),(p_regs,gt_regs)
     """
-    nA,Gy,Gx,_ = preds.shape
+    N = preds.size(0)
 
-    p_pos_preds = preds.reshape(-1,2)[:, 1]
-    p_neg_preds = preds.reshape(-1,2)[:, 0]
-    gt_pos_preds = torch.zeros(*(nA*Gy*Gx,), dtype=preds.dtype, device=preds.device)
-    gt_neg_preds = torch.zeros(*(nA*Gy*Gx,), dtype=preds.dtype, device=preds.device)
+    p_preds = preds.clone()
+    gt_preds = torch.zeros(*(N,), dtype=torch.int64, device=preds.device)
 
-    p_regs = regs.reshape(-1,4)
+    p_regs = regs.clone()
 
     # ps: N = nA * Gy * Gx
     # N,4 | M,4 => N,M
@@ -52,9 +50,6 @@ def build_targets(preds:torch.Tensor, regs:torch.Tensor, default_boxes:torch.Ten
         positives_mask[ignore_indexes] = False
         negatives_mask[ignore_indexes] = False
 
-    gt_pos_preds[positives_mask] = 1.
-    gt_neg_preds[negatives_mask] = 1.
-
     # resample positives and negatives as 128:128
     positives, = torch.where(positives_mask)
     negatives, = torch.where(negatives_mask)
@@ -65,16 +60,24 @@ def build_targets(preds:torch.Tensor, regs:torch.Tensor, default_boxes:torch.Ten
     picked_negatives = np.random.choice(negatives.cpu().numpy(), size=negative_count, replace=False)
     ##################################################
 
-    p_regs = p_regs[picked_positives]
-    # TODO convert gt boxes to gt offsets
-    gt_regs = gt_boxes[matched_gt_indexes][picked_positives]
-    gt_regs = xyxy2offsets(gt_regs, default_boxes[picked_positives])
+    positives_mask = torch.zeros(*(N,), dtype=torch.bool, device=preds.device)
+    negatives_mask = torch.zeros(*(N,), dtype=torch.bool, device=preds.device)
 
-    targets = []
-    targets.append( (p_pos_preds[picked_positives], gt_pos_preds[picked_positives]) )
-    targets.append( (p_neg_preds[picked_negatives], gt_neg_preds[picked_negatives]) )
-    targets.append( (p_regs,gt_regs) )
-    return targets
+    positives_mask[picked_positives] = True
+    negatives_mask[picked_negatives] = True
+
+    p_regs = p_regs[positives_mask]
+
+    gt_regs = gt_boxes[matched_gt_indexes][positives_mask]
+    gt_regs = xyxy2offsets(gt_regs, default_boxes[positives_mask])
+
+    gt_preds[positives_mask] = 1
+    gt_preds[negatives_mask] = 0
+
+    gt_preds = gt_preds[positives_mask | negatives_mask]
+    p_preds = p_preds[positives_mask | negatives_mask]
+
+    return (p_preds,gt_preds),(p_regs,gt_regs)
 
 
 def xyxy2offsets(boxes, anchors):

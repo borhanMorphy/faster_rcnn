@@ -151,3 +151,23 @@ def caclulate_means(total_metrics):
     for k,v in means.items():
         means[k] = sum(means[k]) / len(means[k])
     return means
+
+def roi_recalls(predictions:List[torch.Tensor],
+        ground_truths:List[torch.Tensor], iou_thresholds:torch.Tensor):
+    # preds [torch.tensor(N,5), ...]
+    # gts [torch.tensor(N,4), ...]
+    th_size = iou_thresholds.size(0)
+    total_gts = 0.
+    total_hits = torch.zeros(th_size, device=predictions[0].device)
+
+    for preds,gts in zip(predictions,ground_truths):
+        total_targets = gts.size(0)
+        ious = jaccard_vectorized(preds[:,:4],gts) # N,4 | M,4 => N,M
+        hits = torch.zeros((th_size,total_targets), dtype=torch.bool, device=gts.device)
+        for i in range(th_size):
+            for j in range(total_targets):
+                hits[i,j] = ious[:,j].max() > iou_thresholds[i]
+            total_hits[i] += hits[i].sum()
+        total_gts += total_targets
+
+    return total_hits/total_gts

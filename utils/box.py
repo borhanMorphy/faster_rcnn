@@ -12,10 +12,16 @@ def generate_default_boxes(anchors, fmap_dims,
     dboxes = anchors.repeat(h*w,1,1).permute(1,0,2)
     dboxes[:,:,:2] += grids
     dboxes[:,:,2:] += grids
-    return dboxes.reshape(-1,4)
+
+    return dboxes.permute(1,0,2).reshape(-1,4)
 
 def generate_anchors(effective_stride:int, ratios:List=[0.5,1,2],
-        scales:List=[0.5,1,2], dtype=torch.float32, device:str='cpu'):
+        scales:List=[0.5,1,2], dtype=torch.float32, device:str='cpu') -> torch.Tensor:
+    """Generates anchors using given parameters
+
+    Returns:
+        anchors torch.Tensor (len(scales)*len(ratios),4) as xmin ymin xmax ymax
+    """
 
     r = torch.tensor([ratios], dtype=dtype, device=device) # (len(ratios),1)
     s = torch.tensor([scales], dtype=dtype, device=device) * effective_stride # (len(scales),)
@@ -34,7 +40,7 @@ def generate_anchors(effective_stride:int, ratios:List=[0.5,1,2],
     h = h.unsqueeze(1) * s
 
     # TODO handle `+1`
-    return _vector2anchor(x_ctr.repeat(3), y_ctr.repeat(3), w.reshape(1,-1), h.reshape(1,-1)) + 1
+    return _vector2anchor(x_ctr.repeat(len(scales)), y_ctr.repeat(len(scales)), w.reshape(1,-1), h.reshape(1,-1)) + 1
 
 def _vector2anchor(x_ctr:torch.Tensor, y_ctr:torch.Tensor, w:torch.Tensor, h:torch.Tensor):
     xmin = x_ctr - 0.5*(w-1)
@@ -57,18 +63,38 @@ def apply_box_regressions(default_boxes:torch.Tensor, regs:torch.Tensor) -> torc
         regs: bs x N x 4
 
         returns:
-            boxes: bs x (num_anchors * fmap_h * fmap_w) x 4 as xmin ymin xmax ymax
+            boxes: bs x (fmap_h * fmap_w * num_anchors) x 4 as xmin ymin xmax ymax
     """
     # num_anchors x fmap_h * fmap_w x 4 => N x 4
     # convert xyxy => cxcywh
-    anchor_boxes = xyxy2cxcywh(default_boxes.reshape(-1,4))
+    x_ctr,y_ctr,aw,ah = _anchor2vector(default_boxes.reshape(-1,4))
 
-    cx = anchor_boxes[:, 2] * regs[:,:,0] + anchor_boxes[:, 0]
-    cy = anchor_boxes[:, 3] * regs[:,:,1] + anchor_boxes[:, 1]
-    w = torch.exp(regs[:,:,2]) * anchor_boxes[:, 2]
-    h = torch.exp(regs[:,:,3]) * anchor_boxes[:, 3]
+    x_ctr = x_ctr.unsqueeze(0)
+    y_ctr = y_ctr.unsqueeze(0)
+    aw = aw.unsqueeze(0)
+    ah = ah.unsqueeze(0)
 
-    return cxcywh2xyxy(torch.stack([cx,cy,w,h],dim=-1))
+    dx = regs[:, :, 0::4]
+    dy = regs[:, :, 1::4]
+    dw = regs[:, :, 2::4]
+    dh = regs[:, :, 3::4]
+
+    pred_ctr_x = dx * aw.unsqueeze(2) + x_ctr.unsqueeze(2)
+    pred_ctr_y = dy * ah.unsqueeze(2) + y_ctr.unsqueeze(2)
+    pred_w = torch.exp(dw) * aw.unsqueeze(2)
+    pred_h = torch.exp(dh) * ah.unsqueeze(2)
+
+    pred_boxes = regs.clone()
+    # x1
+    pred_boxes[:, :, 0::4] = pred_ctr_x - 0.5 * pred_w
+    # y1
+    pred_boxes[:, :, 1::4] = pred_ctr_y - 0.5 * pred_h
+    # x2
+    pred_boxes[:, :, 2::4] = pred_ctr_x + 0.5 * pred_w
+    # y2
+    pred_boxes[:, :, 3::4] = pred_ctr_y + 0.5 * pred_h
+
+    return pred_boxes
 
 
 def get_box_regressions():
