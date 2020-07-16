@@ -8,7 +8,7 @@ from tqdm import tqdm
 from torch.utils.data import DataLoader
 from typing import Dict
 import torch.nn.functional as F
-from utils.metrics import caclulate_means,roi_recalls
+from utils.metrics import caclulate_means, roi_recalls
 
 def custom_collate_fn(batch):
     batch,targets = zip(*batch)
