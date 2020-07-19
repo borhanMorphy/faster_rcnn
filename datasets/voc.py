@@ -26,7 +26,7 @@ class VOCDataset(VOCDetection):
         img = np.array(img) # convert PIL image => RGB numpy array
         targets = {
             'boxes':[],
-            'classes':[],
+            'labels':[],
             'img_dims':None
         }
         img_size = (int(otargets['annotation']['size']['height']), int(otargets['annotation']['size']['width']))
@@ -37,10 +37,10 @@ class VOCDataset(VOCDetection):
                 [target['bndbox']['xmin'],target['bndbox']['ymin'],target['bndbox']['xmax'],target['bndbox']['ymax']]
             )
 
-            targets['classes'].append( self._label_mapper[target['name']] )
+            targets['labels'].append( self._label_mapper[target['name']] )
 
         targets['boxes'] = np.array(targets['boxes'], dtype=np.float32)
-        targets['classes'] = np.array(targets['classes'], dtype=np.int32)
+        targets['labels'] = np.array(targets['labels'], dtype=np.int32)
         targets['img_dims'] = np.array(img_size, dtype=np.int32)
 
 

@@ -26,11 +26,14 @@ def test_default_boxes():
     import numpy as np
 
     effective_stride = 16
-    h,w = (600,600)
+    h,w = (600,800)
     fmap_h,fmap_w = int(h/effective_stride), int(w/effective_stride)
 
     anchors = generate_anchors(effective_stride)
+    print(anchors)
     boxes = generate_default_boxes(anchors, (fmap_h,fmap_w), effective_stride)
+    print(boxes.shape)
+    print(boxes[0][1])
 
     render(boxes)
 
@@ -59,12 +62,13 @@ def render(boxes):
     import numpy as np
 
     blank_white = np.ones((600,600,3), dtype=np.uint8) * 255
-    for x1,y1,x2,y2 in boxes.long().numpy():
+    for x1,y1,x2,y2 in boxes.reshape(-1,4).long().numpy():
         t_img = cv2.rectangle(blank_white.copy(), (x1,y1), (x2,y2), (0,0,255), 2)
         cv2.imshow("",t_img)
         cv2.waitKey(2)
 
 if __name__ == "__main__":
     from utils.box import generate_anchors
-    tt(generate_anchors(16))
-    #test_default_boxes()
+    #tt(generate_anchors(16))
+    test_default_boxes()
+    #test_anchors()

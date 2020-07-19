@@ -27,8 +27,8 @@ def reduce_dataset(ds,ratio=0.1):
     return torch.utils.data.random_split(ds, [size,rest])[0]
 
 def main():
-    train_transforms = TrainTransforms()
-    st = torch.load('rpn_pretrained_2.pth', map_location='cpu')
+    small_dim_size = 600
+    train_transforms = TrainTransforms(small_dim_size=small_dim_size)
     debug = False # TODO add debug
     batch_size = 1
     epochs = 1
@@ -46,16 +46,15 @@ def main():
     ds_val = reduce_dataset(ds_val, ratio=0.1)
     dl_val = generate_dl(ds_val, batch_size=batch_size)
 
-    backbone = models.vgg16(pretrained=True).features[:-1]
+    backbone = models.alexnet(pretrained=True).features[:-1]
 
-    rpn = RPN(backbone, features=512, n=3, effective_stride=16,
+    rpn = RPN(backbone, features=256, n=3, effective_stride=16,
         conf_threshold=0.0, iou_threshold=0.7, keep_n=2000)
-    #rpn = RPN(backbone, features=512, n=3, effective_stride=16) # for vgg16
+
     rpn.debug = debug
-    rpn.load_state_dict(st)
     rpn.to('cuda')
 
-    verbose = 1
+    verbose = 10
     optimizer = torch.optim.SGD(rpn.parameters(), lr=learning_rate,
         momentum=momentum, weight_decay=weight_decay)
 
@@ -71,7 +70,7 @@ def main():
         torch.save(rpn.state_dict(), f"./rpn_epoch_{epoch+1}.pth")
 
         # start validation
-        validation_loop(rpn, dl_val, batch_size, epoch)
+        #validation_loop(rpn, dl_val, batch_size, epoch)
 
 def train_loop(model, dl, batch_size:int, epoch, epochs, optimizer, verbose, max_iter_count):
     running_metrics = []
@@ -80,7 +79,9 @@ def train_loop(model, dl, batch_size:int, epoch, epochs, optimizer, verbose, max
     for iter_count,(batch,targets) in enumerate(dl):
 
         optimizer.zero_grad()
-        metrics = model.training_step(batch.cuda(), targets)
+        metrics = model.training_step(batch.cuda(), targets, imgs=tensor2img(batch))
+        if model.debug:
+            continue
         metrics['loss'].backward()
         optimizer.step()
 
@@ -96,7 +97,6 @@ def train_loop(model, dl, batch_size:int, epoch, epochs, optimizer, verbose, max
             log = "\t".join(log)
             log += f"\titer[{iter_count}/{max_iter_count}]"
             print(log)
-
 
 def validation_loop(model, dl, batch_size:int, epoch):
     # start validation
@@ -114,6 +114,10 @@ def validation_loop(model, dl, batch_size:int, epoch):
     iou_thresholds = torch.arange(0.3, 1.0, 0.05, device=predictions[0].device)
     recalls = roi_recalls(predictions, ground_truths, iou_thresholds=iou_thresholds)
     print(f"validation results for epoch {epoch+1}, RPN mean recall at iou thresholds {iou_thresholds} is: {int(recalls.mean()*100)}")
+
+def tensor2img(batch):
+    imgs = (batch.permute(0,2,3,1).cpu() * 255).numpy().astype(np.uint8)
+    return [cv2.cvtColor(img,cv2.COLOR_RGB2BGR) for img in imgs]
 
 if __name__ == "__main__":
     main()

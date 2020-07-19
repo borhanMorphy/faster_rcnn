@@ -3,6 +3,10 @@ from typing import List,Tuple
 
 def generate_default_boxes(anchors, fmap_dims,
         effective_stride:str, dtype=torch.float32, device:str='cpu'):
+    """
+    Returns:
+        default_boxes(torch.Tensor(fh,fw,nA,4)) as xmin,ymin,xmax,ymax
+    """
     h,w = fmap_dims
     grid_x = torch.arange(w, dtype=torch.float32, device=device) * effective_stride
     grid_y = torch.arange(h, dtype=torch.float32, device=device) * effective_stride
@@ -13,7 +17,7 @@ def generate_default_boxes(anchors, fmap_dims,
     dboxes[:,:,:2] += grids
     dboxes[:,:,2:] += grids
 
-    return dboxes.permute(1,0,2).reshape(-1,4)
+    return dboxes.permute(1,0,2).reshape(h,w,-1,4)
 
 def generate_anchors(effective_stride:int, ratios:List=[0.5,1,2],
         scales:List=[0.5,1,2], dtype=torch.float32, device:str='cpu') -> torch.Tensor:
@@ -96,40 +100,6 @@ def apply_box_regressions(default_boxes:torch.Tensor, regs:torch.Tensor) -> torc
 
     return pred_boxes
 
-
-def get_box_regressions():
-    pass
-
-def cxcywh2xyxy(o_boxes:torch.Tensor):
-    boxes = o_boxes.clone()
-    single_batch = len(boxes.shape) == 2
-    boxes = boxes.unsqueeze(0) if single_batch else boxes # N,4 => 1,N,4
-
-    w_half = boxes[:, :, 2] / 2
-    h_half = boxes[:, :, 3] / 2
-
-    boxes[:, :, 2] = boxes[:, :, 0] + w_half
-    boxes[:, :, 3] = boxes[:, :, 1] + h_half
-    boxes[:, :, 0] = boxes[:, :, 0] - w_half
-    boxes[:, :, 1] = boxes[:, :, 1] - h_half
-
-    return boxes.squeeze(0) if single_batch else boxes
-
-def xyxy2cxcywh(o_boxes:torch.Tensor):
-    boxes = o_boxes.clone()
-    single_batch = len(boxes.shape) == 2
-    boxes = boxes.unsqueeze(0) if single_batch else boxes # N,4 => 1,N,4
-
-    # x1,y1,x2,y2
-    w = boxes[:, :, 2] - boxes[:, :, 0]
-    h = boxes[:, :, 3] - boxes[:, :, 1]
-
-    boxes[:, :, :2] = (boxes[:, :, :2] + boxes[:, :, 2:]) / 2
-    boxes[:, :, 2] = w
-    boxes[:, :, 3] = h
-
-    return boxes.squeeze(0) if single_batch else boxes
-
 def jaccard_vectorized(box_a:torch.Tensor, box_b:torch.Tensor) -> torch.Tensor:
     inter = intersect(box_a,box_b)
     area_a = ((box_a[:, 2]-box_a[:, 0]) *
@@ -180,28 +150,28 @@ def clip_boxes(c_boxes:torch.Tensor, img_dims:torch.Tensor):
 
     return boxes
 
-def get_ignore_boxes(c_boxes:torch.Tensor, img_dims:Tuple):
-    # TODO
+def get_ignore_mask(default_boxes:torch.Tensor, img_dims:Tuple):
     """Ignore boxes that exceeds image region
 
     Params:
-        boxes: N x 4 as xmin ymin xmax ymax
+        default_boxes: fh x fw x nA x 4 as xmin ymin xmax ymax
         img_dims: image height, image width
     Returns:
-        ignore_indexes: (N',)
+        ignore_mask: fh x fw x nA
     """
     h,w = img_dims
-    N,_ = c_boxes.shape
+    fh,fw,nA,_ = default_boxes.shape
 
-    igore_boxes_mask = torch.zeros(*(N,), dtype=torch.bool, device=c_boxes.device)
+    ignore_mask = torch.zeros(*(fh,fw,nA), dtype=torch.bool, device=default_boxes.device)
 
-    mask1 = c_boxes[:, 0] < 0
-    mask2 = c_boxes[:, 1] < 0
-    mask3 = c_boxes[:, 2] > w
-    mask4 = c_boxes[:, 3] > h
-    igore_boxes_mask[mask1 | mask2 | mask3 | mask4] = True
-    ignore_box_indexes, = torch.where(igore_boxes_mask)
-    return ignore_box_indexes
+    ignore_mask = ignore_mask.reshape(-1)
+    c_boxes = default_boxes.reshape(-1,4)
+
+    ignore_mask[c_boxes[:, 0] < 0] = True
+    ignore_mask[c_boxes[:, 1] < 0] = True
+    ignore_mask[c_boxes[:, 2] - c_boxes[:, 0] > w] = True
+    ignore_mask[c_boxes[:, 3] - c_boxes[:, 1] > h] = True
+    return ignore_mask.reshape(fh,fw,nA)
 
 if __name__ == "__main__":
     from cv2 import cv2

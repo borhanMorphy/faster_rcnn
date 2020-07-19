@@ -10,11 +10,13 @@ from utils.box import (
     generate_default_boxes,
     apply_box_regressions,
     clip_boxes,
-    get_ignore_boxes
+    get_ignore_mask
 )
 
 from utils.train import (
-    build_targets
+    build_targets,
+    build_targets_v2,
+    resample_pos_neg_distribution
 )
 from utils.data import load_data
 
@@ -41,11 +43,11 @@ class DetectionLayer(nn.Module):
     def forward(self, preds:torch.Tensor, regs:torch.Tensor) -> List[torch.Tensor]:
 
         bs,_,fh,fw = preds.shape
-        # bs x num_anchors*2 x fmap_h x fmap_w => bs x fmap_h x fmap_w x (num_anchors*2) => bs x N x 2
-        preds = preds.permute(0,2,3,1).reshape(bs,-1,2).contiguous()
+        # bs x num_anchors x fmap_h x fmap_w => bs x fmap_h x fmap_w x num_anchors
+        preds = preds.permute(0,2,3,1)
 
-        # bs x num_anchors*4 x fmap_h x fmap_w => bs x fmap_h x fmap_w x (num_anchors*4) => bs x N x 4
-        regs = regs.permute(0,2,3,1).reshape(bs,-1,4).contiguous()
+        # bs x num_anchors*4 x fmap_h x fmap_w => bs x fmap_h x fmap_w x (num_anchors*4)
+        regs = regs.permute(0,2,3,1).reshape(bs,fh,fw,-1,4)
 
         if preds.device != self.anchors.device:
             self.anchors = self.anchors.to(preds.device)
@@ -54,7 +56,7 @@ class DetectionLayer(nn.Module):
             # re-generate default boxes if feature map size is changed
             self._fw = fw
             self._fh = fh
-            self.default_boxes = generate_default_boxes( # nA x (fmap_h * fmap_w) x 4 as xmin ymin xmax ymax
+            self.default_boxes = generate_default_boxes( # fh x fw x nA x 4 as xmin ymin xmax ymax
                 self.anchors, (self._fh, self._fw),
                 self.effective_stride, device=preds.device)
         return preds,regs
@@ -62,13 +64,14 @@ class DetectionLayer(nn.Module):
     def _inference_postprocess(self, preds:torch.Tensor, regs:torch.Tensor, img_dims:torch.Tensor):
         """
         Arguments:
-            preds: bs x (fmap_h * fmap_w * nA)  x 2
+            preds: bs x (fmap_h * fmap_w * nA)
             regs:  bs x (fmap_h * fmap_w * nA)  x 4
             img_dims: torch.tensor(height,width)
         """
         bs = preds.size(0)
 
         # bs x N x 2 => bs x N
+        # TODO convert to sigmoid since its bce loss
         scores = F.softmax(preds, dim=-1)[:,:,1]
 
 
@@ -92,7 +95,6 @@ class DetectionLayer(nn.Module):
             det_results.append(proposals[pick,:])
 
         return det_results
-
 
 class RPN(nn.Module):
     """Input features represents vgg16 backbone and n=3 is set because of the `faster rcnn` parper
@@ -118,7 +120,7 @@ class RPN(nn.Module):
             nn.ReLU(inplace=True))
 
         self.cls_conv_layer = nn.Conv2d(
-            in_channels=features, out_channels=num_anchors*2,
+            in_channels=features, out_channels=num_anchors,
             kernel_size=1, stride=1, padding=0)
 
         self.reg_conv_layer = nn.Conv2d(
@@ -140,46 +142,40 @@ class RPN(nn.Module):
 
         return self.detection_layer(preds,regs)
 
-    def training_step(self, batch, targets):
-        # preds: bs x nA x fmap_h x fmap_w x 2
-        # regs: bs x nA x fmap_h x fmap_w x 4
-
+    def training_step(self, batch, targets, imgs=None):
+        ih,iw = batch.shape[-2:]
         preds,regs = self.forward(batch)
-        bs = preds.size(0)
+        ignore_mask = get_ignore_mask(self.detection_layer.default_boxes, (ih,iw))
 
-        metrics = {
-            'loss':0,
-            'reg_loss':0,
-            'cls_loss':0
+        Ncls = 256
+        Nreg = 2400
+        w_lamda = 10
+        total_samples = 256
+        pos_ratio = .5
+
+        # * t_preds not used since classes only contains {BG|FG} for RPN
+        (pos_mask,neg_mask),(t_objness,t_preds,t_regs) = build_targets_v2(
+            preds,regs, self.detection_layer.default_boxes, ignore_mask, targets, imgs=imgs)
+
+        # resample positive and negatives to have ratio of 1:1 (pad with negatives if needed)
+        pos_mask,neg_mask = resample_pos_neg_distribution(
+            pos_mask, neg_mask, total_count=total_samples, positive_ratio=pos_ratio)
+
+        # calculate binary cross entropy with logits
+        cls_loss = F.binary_cross_entropy_with_logits(
+            preds[pos_mask | neg_mask], t_objness[pos_mask | neg_mask], reduction='sum')
+
+        # calculate smooth l1 loss for bbox regression
+        reg_loss = F.smooth_l1_loss(regs[pos_mask][:,0], t_regs[pos_mask][:,0], reduction='sum') +\
+            F.smooth_l1_loss(regs[pos_mask][:,1], t_regs[pos_mask][:,1], reduction='sum') +\
+                F.smooth_l1_loss(regs[pos_mask][:,2], t_regs[pos_mask][:,2], reduction='sum') +\
+                    F.smooth_l1_loss(regs[pos_mask][:,3], t_regs[pos_mask][:,3], reduction='sum')
+
+        return {
+            'loss': (cls_loss)/Ncls +(w_lamda*reg_loss)/Nreg,
+            'cls_loss':cls_loss.detach().item(),
+            'reg_loss':reg_loss.detach().item()
         }
-
-        for i in range(bs):
-            img_dims = targets[i]["img_dims"].cuda()
-            gt_boxes = targets[i]["boxes"].cuda()
-            gt_classes = targets[i]["classes"].cuda()
-
-            ignore_indexes = get_ignore_boxes(self.detection_layer.default_boxes, img_dims=img_dims)
-            (p_preds,gt_preds),(p_regs,gt_regs) = build_targets(preds[i], regs[i],
-                self.detection_layer.default_boxes, gt_boxes, gt_classes,
-                ignore_indexes=ignore_indexes)
-
-
-            cls_loss = F.cross_entropy(p_preds, gt_preds, reduction='sum')
-
-            reg_loss = F.smooth_l1_loss(p_regs[:,0],gt_regs[:,0], reduction='sum') + \
-                F.smooth_l1_loss(p_regs[:,1],gt_regs[:,1], reduction='sum') + \
-                    F.smooth_l1_loss(p_regs[:,2],gt_regs[:,2], reduction='sum') + \
-                        F.smooth_l1_loss(p_regs[:,3],gt_regs[:,3], reduction='sum')
-
-            Ncls = 256
-            Nreg = 2400
-            w_lamda = 10
-
-            metrics['loss'] += (cls_loss/Ncls + (w_lamda*reg_loss)/Nreg)
-            metrics['cls_loss'] += (cls_loss.item() / Ncls)
-            metrics['reg_loss'] += ((w_lamda*reg_loss.item()) / Nreg)
-
-        return metrics
 
     def test_step(self, batch, targets):
         # preds: bs x nA x fmap_h x fmap_w x 2

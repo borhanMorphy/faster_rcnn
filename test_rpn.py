@@ -39,8 +39,8 @@ class TestTransforms():
         if 'boxes' in targets:
             targets['boxes'] = torch.from_numpy(targets['boxes']) * scale_factor
 
-        if 'classes' in targets:
-            targets['classes'] = torch.from_numpy(targets['classes'])
+        if 'labels' in targets:
+            targets['labels'] = torch.from_numpy(targets['labels'])
 
         if 'img_dims' in targets:
             targets['img_dims'] = (torch.from_numpy(targets['img_dims']) * scale_factor).long()
