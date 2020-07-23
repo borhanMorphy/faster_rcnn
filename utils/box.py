@@ -61,10 +61,10 @@ def _anchor2vector(anchors:torch.Tensor):
     y_ctr = anchors[:, 1] + 0.5 * (h-1)
     return x_ctr,y_ctr,w,h
 
-def apply_box_regressions(default_boxes:torch.Tensor, regs:torch.Tensor) -> torch.Tensor:
+def apply_box_regressions(regs:torch.Tensor, default_boxes:torch.Tensor) -> torch.Tensor:
     """
-        default_boxes:
         regs: bs x N x 4
+        default_boxes: K x 4
 
         returns:
             boxes: bs x (fmap_h * fmap_w * num_anchors) x 4 as xmin ymin xmax ymax
@@ -78,15 +78,15 @@ def apply_box_regressions(default_boxes:torch.Tensor, regs:torch.Tensor) -> torc
     aw = aw.unsqueeze(0)
     ah = ah.unsqueeze(0)
 
-    dx = regs[:, :, 0::4]
-    dy = regs[:, :, 1::4]
-    dw = regs[:, :, 2::4]
-    dh = regs[:, :, 3::4]
+    tx = regs[:, :, 0::4]
+    ty = regs[:, :, 1::4]
+    tw = regs[:, :, 2::4]
+    th = regs[:, :, 3::4]
 
-    pred_ctr_x = dx * aw.unsqueeze(2) + x_ctr.unsqueeze(2)
-    pred_ctr_y = dy * ah.unsqueeze(2) + y_ctr.unsqueeze(2)
-    pred_w = torch.exp(dw) * aw.unsqueeze(2)
-    pred_h = torch.exp(dh) * ah.unsqueeze(2)
+    pred_ctr_x = tx * aw.unsqueeze(2) + x_ctr.unsqueeze(2)
+    pred_ctr_y = ty * ah.unsqueeze(2) + y_ctr.unsqueeze(2)
+    pred_w = torch.exp(tw) * aw.unsqueeze(2)
+    pred_h = torch.exp(th) * ah.unsqueeze(2)
 
     pred_boxes = regs.clone()
     # x1
@@ -134,7 +134,7 @@ def intersect(box_a:torch.Tensor, box_b:torch.Tensor) -> torch.Tensor:
     inter = torch.clamp((max_xy - min_xy), min=0)
     return inter[:, :, 0] * inter[:, :, 1]
 
-def clip_boxes(c_boxes:torch.Tensor, img_dims:torch.Tensor):
+def clip_boxes(c_boxes:torch.Tensor, img_dims:Tuple):
     """Clips boxes that exceeds image region
 
     Params:

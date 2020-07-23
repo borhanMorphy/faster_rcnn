@@ -8,83 +8,25 @@ from typing import Tuple,List,Dict
 import numpy as np
 from cv2 import cv2
 
-def build_targets(preds:torch.Tensor, regs:torch.Tensor, default_boxes:torch.Tensor, gt_boxes:torch.Tensor, gt_classes:torch.Tensor,
-        negative_iou_threshold:float=0.3, positive_iou_threshold:float=0.7, ignore_indexes:torch.Tensor=None):
+def build_targets_v2(preds:torch.Tensor, regs:torch.Tensor,
+        pred_boxes:List[torch.Tensor], targets:List[Dict[str,torch.Tensor]]):
     """[summary]
 
     Args:
-        preds (torch.Tensor): N x 2
-        regs (torch.Tensor): N x 4
-        default_boxes (torch.Tensor): (nA * Gy * Gx) x 4
-        negative_iou_threshold (float, optional): [description]. Defaults to 0.3.
-        positive_iou_threshold (float, optional): [description]. Defaults to 0.7.
-        ignore_indexes (torch.Tensor, optional): X,4 Defaults to None.
-
-    Returns:
-        p_preds.shape(Np,2) == gt_preds.shape(Np,2) # as {FG,BG}
-        p_regs.shape(Nr,4) == gt_regs.shape(Nr,4) # as (tx,ty,tw,th)
-        (p_preds,gt_preds),(p_regs,gt_regs)
+        preds (torch.Tensor): K,num_classes # including background
+        regs (torch.Tensor): K,num_classes,4
+        pred_boxes (List[torch.Tensor]): [M,5]
+        targets (List[Dict[str,torch.Tensor]]): [
+            {
+                'boxes':torch.tensor(T,4) as xmin,ymin,xmax,ymax
+                'labels':torch.tensor(T,) as label
+            },
+            ...
+        ]
     """
-    N = preds.size(0)
-
-    p_preds = preds.clone()
-    gt_preds = torch.zeros(*(N,), dtype=torch.int64, device=preds.device)
-
-    p_regs = regs.clone()
-
-    # ps: N = nA * Gy * Gx
-    # N,4 | M,4 => N,M
-    ious = jaccard_vectorized(default_boxes, gt_boxes)
-
-    max_values,matched_gt_indexes = ious.max(dim=1)
-    # max_values: N, {iou values between prediction and matched gt}
-    # matched_gt_indexes: N, {gt index that matched with prediction}
-
-    positives_mask = max_values > positive_iou_threshold # N, boolean mask
-    negatives_mask = max_values < negative_iou_threshold # N, boolean mask
-
-    for j in range(gt_boxes.size(0)):
-        for k in ious[:,j].argsort(descending=True):
-            if ignore_indexes is not None and k in ignore_indexes: continue
-            positives_mask[k] = True
-            negatives_mask[k] = False
-            break
-
-    if ignore_indexes is not None:
-        positives_mask[ignore_indexes] = False
-        negatives_mask[ignore_indexes] = False
-
-    # resample positives and negatives as 128:128
-    positives, = torch.where(positives_mask)
-    negatives, = torch.where(negatives_mask)
-    positive_count = min(positives.size(0),128)
-    negative_count = 256-positive_count
-
-    picked_positives = np.random.choice(positives.cpu().numpy(), size=positive_count, replace=False)
-    picked_negatives = np.random.choice(negatives.cpu().numpy(), size=negative_count, replace=False)
-    ##################################################
-
-    positives_mask = torch.zeros(*(N,), dtype=torch.bool, device=preds.device)
-    negatives_mask = torch.zeros(*(N,), dtype=torch.bool, device=preds.device)
-
-    positives_mask[picked_positives] = True
-    negatives_mask[picked_negatives] = True
-
-    p_regs = p_regs[positives_mask]
-
-    gt_regs = gt_boxes[matched_gt_indexes][positives_mask]
-    gt_regs = xyxy2offsets(gt_regs, default_boxes[positives_mask])
-
-    gt_preds[positives_mask] = 1
-    gt_preds[negatives_mask] = 0
-
-    gt_preds = gt_preds[positives_mask | negatives_mask]
-    p_preds = p_preds[positives_mask | negatives_mask]
-
-    return (p_preds,gt_preds),(p_regs,gt_regs)
 
 
-def build_targets_v2(preds:torch.Tensor, regs:torch.Tensor, default_boxes:torch.Tensor,
+def build_targets(preds:torch.Tensor, regs:torch.Tensor, default_boxes:torch.Tensor,
         ignore_mask:torch.Tensor, targets:List, negative_iou_threshold:float=0.3,
         positive_iou_threshold:float=0.7, imgs=None):
     # ! ignore boxes ignored after assigment, this can cause best matches to be ignored
@@ -92,7 +34,7 @@ def build_targets_v2(preds:torch.Tensor, regs:torch.Tensor, default_boxes:torch.
 
     Args:
         preds (torch.Tensor): bs x fh x fw x nA
-        regs (torch.Tensor): bs x fh x fw x nA x 2
+        regs (torch.Tensor): bs x fh x fw x nA x 4
         default_boxes (torch.Tensor): fh x fw x nA x 4
         ignore_mask(torch.Tensor): fh x fw x nA
         targets:List[Dict]
@@ -154,7 +96,7 @@ def build_targets_v2(preds:torch.Tensor, regs:torch.Tensor, default_boxes:torch.
             t_reg[ pmask & (max_iou_ids == gt_idx) ] = gt_boxes[gt_idx]
 
         pos[(max_iou_values >= positive_iou_threshold).reshape(fh,fw,nA)] = True  # fh,fw,nA
-        
+
         # find negative candidates
         neg[max_iou_values <= negative_iou_threshold] = True  # fh,fw,nA
         # extract best matches
@@ -232,10 +174,12 @@ def xyxy2offsets(boxes:torch.Tensor, anchors:torch.Tensor):
     Args:
         boxes (torch.Tensor): N,4 as xmin,ymin,xmax,ymax
         anchors (torch.Tensor): N,4 as xmin,ymin,xmax,ymax
+    Returns:
+        offsets (torch.Tensor): N,4 as tx,ty,tw,th
     """
     a_x_ctr,a_y_ctr,a_w,a_h = _anchor2vector(anchors)
     b_x_ctr,b_y_ctr,b_w,b_h = _anchor2vector(boxes)
-    
+
     tx = (b_x_ctr-a_x_ctr) / a_w
     ty = (b_y_ctr-a_y_ctr) / a_h
     tw = torch.log(b_w/a_w)
@@ -243,15 +187,29 @@ def xyxy2offsets(boxes:torch.Tensor, anchors:torch.Tensor):
 
     return torch.stack([tx,ty,tw,th], dim=-1)
 
-def offsets2xyxy(boxes:torch.Tensor, anchors:torch.Tensor):
-    """Convert boxes to offsets
+def offsets2xyxy(offsets:torch.Tensor, anchors:torch.Tensor):
+    """Convert offsets to boxes
 
     Args:
-        boxes (torch.Tensor): N,4 as xmin,ymin,xmax,ymax
+        offsets (torch.Tensor): N,4 as tx,ty,tw,th
         anchors (torch.Tensor): N,4 as xmin,ymin,xmax,ymax
+
+    Returns:
+        boxes (torch.Tensor): N,4 as xmin,ymin,xmax,ymax
     """
-    # TODO
-    pass
+    a_x_ctr,a_y_ctr,a_w,a_h = _anchor2vector(anchors)
+    tx = offsets[:, 0]
+    ty = offsets[:, 1]
+    tw = offsets[:, 2]
+    th = offsets[:, 3]
+
+    b_x_ctr = tx*a_w + a_x_ctr
+    b_y_ctr = ty*a_h + a_y_ctr
+    b_w = torch.exp(tw)*a_w
+    b_h = torch.exp(th)*a_h
+
+    return _vector2anchor(b_x_ctr,b_y_ctr,b_w,b_h)
+
 
 def resample_pos_neg_distribution(positive_mask:torch.Tensor, negative_mask:torch.Tensor,
         total_count:int=256, positive_ratio:float=.5):

@@ -1,5 +1,5 @@
 import torchvision.models as models
-from rpn import RPN
+from neuralnets import FasterRCNN
 from datasets import factory as ds_factory
 import torch
 import numpy as np
@@ -38,6 +38,9 @@ def main():
     momentum = 0.9
     weight_decay = 5e-4
     total_iter_size = 60000
+    num_classes = 20
+    features = 256
+    effective_stride = 16
 
     ds_train = ds_factory("VOC_train", transforms=train_transforms, download=False)
     dl_train = generate_dl(ds_train, batch_size=batch_size)
@@ -48,14 +51,12 @@ def main():
 
     backbone = models.alexnet(pretrained=True).features[:-1]
 
-    rpn = RPN(backbone, features=256, n=3, effective_stride=16,
-        conf_threshold=0.0, iou_threshold=0.7, keep_n=2000)
+    model = FasterRCNN(num_classes, backbone, features, effective_stride)
 
-    rpn.debug = debug
-    rpn.to('cuda')
+    model.to('cuda')
 
-    verbose = 10
-    optimizer = torch.optim.SGD(rpn.parameters(), lr=learning_rate,
+    verbose = 100
+    optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate,
         momentum=momentum, weight_decay=weight_decay)
 
     max_iter_count = int(len(ds_train)/batch_size)
@@ -64,10 +65,10 @@ def main():
 
     for epoch in range(epochs):
         # start training
-        train_loop(rpn, dl_train, batch_size, epoch, epochs, optimizer, verbose, max_iter_count)
+        train_loop(model, dl_train, batch_size, epoch, epochs, optimizer, verbose, max_iter_count)
 
         # save checkpoitn
-        torch.save(rpn.state_dict(), f"./rpn_epoch_{epoch+1}.pth")
+        #torch.save(model.state_dict(), f"./faster_rcnn_epoch_{epoch+1}.pth")
 
         # start validation
         #validation_loop(rpn, dl_val, batch_size, epoch)
@@ -79,9 +80,7 @@ def train_loop(model, dl, batch_size:int, epoch, epochs, optimizer, verbose, max
     for iter_count,(batch,targets) in enumerate(dl):
 
         optimizer.zero_grad()
-        metrics = model.training_step(batch.cuda(), targets, imgs=tensor2img(batch))
-        if model.debug:
-            continue
+        metrics = model.training_step(batch.cuda(), targets)
         metrics['loss'].backward()
         optimizer.step()
 
