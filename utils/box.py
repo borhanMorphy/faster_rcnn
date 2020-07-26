@@ -57,6 +57,17 @@ def _vector2anchor(x_ctr:torch.Tensor, y_ctr:torch.Tensor, w:torch.Tensor, h:tor
 def _anchor2vector(anchors:torch.Tensor):
     w = anchors[:, 2] - anchors[:, 0] + 1
     h = anchors[:, 3] - anchors[:, 1] + 1
+    if (w < 0).any():
+        print(anchors)
+        print("____________________________________")
+        print(anchors[w < 0])
+        raise AssertionError("width is broken")
+    if (h < 0).any():
+        print(anchors)
+        print("____________________________________")
+        print(anchors[h < 0])
+        raise AssertionError("height is broken")
+
     x_ctr = anchors[:, 0] + 0.5 * (w-1)
     y_ctr = anchors[:, 1] + 0.5 * (h-1)
     return x_ctr,y_ctr,w,h
@@ -144,7 +155,9 @@ def clip_boxes(c_boxes:torch.Tensor, img_dims:Tuple):
     h,w = img_dims
     boxes = c_boxes.clone()
 
-    boxes[..., :2] = torch.clamp(boxes[..., :2], min=0)
+    boxes = torch.clamp(boxes, min=0)
+    boxes[..., 0] = torch.clamp(boxes[..., 0], max=w)
+    boxes[..., 1] = torch.clamp(boxes[..., 1], max=h)
     boxes[..., 2] = torch.clamp(boxes[..., 2], max=w)
     boxes[..., 3] = torch.clamp(boxes[..., 3], max=h)
 

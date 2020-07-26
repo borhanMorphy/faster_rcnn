@@ -29,6 +29,7 @@ class DetectionLayer(nn.Module):
         self.default_boxes = generate_default_boxes(
             self.anchors, (self._fh, self._fw), self.effective_stride)
 
+    @torch.no_grad()
     def forward(self, preds:torch.Tensor, regs:torch.Tensor, img_dims:Tuple, iou_threshold:float=0.7,
             conf_threshold:float=0.5, keep_pre_nms:int=6000, keep_post_nms:int=300) -> List[torch.Tensor]:
         """Computes region of interests
@@ -75,7 +76,13 @@ class DetectionLayer(nn.Module):
             sc = sc[pick]
             proposals = torch.cat([proposals[:keep_post_nms], sc[:keep_post_nms].unsqueeze(-1)],dim=1)
             pick = proposals[:,4] > conf_threshold
-            rois.append(proposals[pick,:4])
+            proposals = proposals[pick, :4]
+
+            # ignore 0 width and height proposals
+            select_w = (proposals[:, 2] - proposals[:, 0]) > 0
+            select_h = (proposals[:, 3] - proposals[:, 1]) > 0
+            
+            rois.append(proposals[select_w & select_h])
 
         return rois
 
@@ -201,9 +208,13 @@ class RPN(nn.Module):
             preds[pos_mask | neg_mask], t_objness[pos_mask | neg_mask])
 
         # calculate smooth l1 loss for bbox regression
-        reg_loss = F.smooth_l1_loss(regs[pos_mask][:,0], t_regs[pos_mask][:,0]) +\
-            F.smooth_l1_loss(regs[pos_mask][:,1], t_regs[pos_mask][:,1]) +\
-                F.smooth_l1_loss(regs[pos_mask][:,2], t_regs[pos_mask][:,2]) +\
-                    F.smooth_l1_loss(regs[pos_mask][:,3], t_regs[pos_mask][:,3])
+        if pos_mask[pos_mask].size(0) == 0:
+            reg_loss = torch.tensor(0., requires_grad=True, dtype=regs.dtype, device=regs.device)
+        else:
+            reg_loss = F.smooth_l1_loss(regs[pos_mask][:,0], t_regs[pos_mask][:,0]) +\
+                F.smooth_l1_loss(regs[pos_mask][:,1], t_regs[pos_mask][:,1]) +\
+                    F.smooth_l1_loss(regs[pos_mask][:,2], t_regs[pos_mask][:,2]) +\
+                        F.smooth_l1_loss(regs[pos_mask][:,3], t_regs[pos_mask][:,3])
+
 
         return {'cls_loss':cls_loss,'reg_loss':reg_loss}
