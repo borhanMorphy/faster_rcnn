@@ -198,12 +198,12 @@ class RPN(nn.Module):
 
         # calculate binary cross entropy with logits
         cls_loss = F.binary_cross_entropy_with_logits(
-            preds[pos_mask | neg_mask], t_objness[pos_mask | neg_mask], reduction='sum')
+            preds[pos_mask | neg_mask], t_objness[pos_mask | neg_mask])
 
         # calculate smooth l1 loss for bbox regression
-        reg_loss = F.smooth_l1_loss(regs[pos_mask][:,0], t_regs[pos_mask][:,0], reduction='sum') +\
-            F.smooth_l1_loss(regs[pos_mask][:,1], t_regs[pos_mask][:,1], reduction='sum') +\
-                F.smooth_l1_loss(regs[pos_mask][:,2], t_regs[pos_mask][:,2], reduction='sum') +\
-                    F.smooth_l1_loss(regs[pos_mask][:,3], t_regs[pos_mask][:,3], reduction='sum')
+        reg_loss = F.smooth_l1_loss(regs[pos_mask][:,0], t_regs[pos_mask][:,0]) +\
+            F.smooth_l1_loss(regs[pos_mask][:,1], t_regs[pos_mask][:,1]) +\
+                F.smooth_l1_loss(regs[pos_mask][:,2], t_regs[pos_mask][:,2]) +\
+                    F.smooth_l1_loss(regs[pos_mask][:,3], t_regs[pos_mask][:,3])
 
         return {'cls_loss':cls_loss,'reg_loss':reg_loss}

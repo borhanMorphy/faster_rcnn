@@ -47,7 +47,7 @@ class FasterRCNN(nn.Module):
             dets,head_losses = dets
             losses = {
                 'rpn_cls_loss':rpn_losses['cls_loss'],
-                'rpn_reg_loss':rpn_losses['regloss'],
+                'rpn_reg_loss':rpn_losses['reg_loss'],
                 'head_cls_loss':head_losses['cls_loss'],
                 'head_reg_loss':head_losses['reg_loss']
             }
@@ -55,7 +55,7 @@ class FasterRCNN(nn.Module):
 
         return dets
 
-
     def training_step(self, batch:torch.Tensor, targets:List[Dict[str,torch.Tensor]]):
         dets,losses = self.forward(batch,targets=targets)
-
+        print(losses)
+        exit(0)

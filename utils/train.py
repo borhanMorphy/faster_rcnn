@@ -9,22 +9,71 @@ import numpy as np
 from cv2 import cv2
 
 def build_targets_v2(preds:torch.Tensor, regs:torch.Tensor,
-        pred_boxes:List[torch.Tensor], targets:List[Dict[str,torch.Tensor]]):
+        default_boxes:torch.Tensor, targets:Dict[str,torch.Tensor],
+        positive_iou_threshold:float=0.5):
     """[summary]
 
     Args:
-        preds (torch.Tensor): K,num_classes # including background
-        regs (torch.Tensor): K,num_classes,4
-        pred_boxes (List[torch.Tensor]): [M,5]
-        targets (List[Dict[str,torch.Tensor]]): [
-            {
-                'boxes':torch.tensor(T,4) as xmin,ymin,xmax,ymax
-                'labels':torch.tensor(T,) as label
-            },
-            ...
-        ]
+        preds (torch.Tensor): K x num_classes # including background
+        regs (torch.Tensor): K x num_classes x 4
+        default_boxes (torch.Tensor): M x 4
+        targets (Dict[str,torch.Tensor]]):{
+            'boxes':torch.tensor(T,4) as xmin,ymin,xmax,ymax
+            'labels':torch.tensor(T,) as label
+        }
+    Returns:
+        Tuple
+            Tuple
+                positive_mask (torch.Tensor): K x nc
+                negative_mask (torch.Tensor): K x nc
+            Tuple
+                target_preds (torch.Tensor): K x nc
+                target_regs (torch.Tensor): K x nc x 4
     """
+    K,nc = preds.shape
+    positive_mask = torch.zeros(*(K,nc,), dtype=torch.bool, device=preds.device)
+    negative_mask = torch.zeros(*(K,nc,), dtype=torch.bool, device=preds.device)
 
+    target_preds = torch.zeros(*(K,nc), dtype=preds.dtype, device=preds.device)
+    target_regs = torch.zeros(*(K,nc,4), dtype=regs.dtype, device=regs.device)
+
+    gt_boxes = targets['boxes'].to(regs.device)
+    gt_labels = targets['labels'].float().to(preds.device)
+
+    # find positive candidates
+    ious = jaccard_vectorized(default_boxes, gt_boxes) # => M,4 | T,4 => M,T
+    max_iou_values,max_iou_ids = ious.max(dim=-1)
+
+    # set True best matched gt with anchors
+    best_matches = ious.argmax(dim=0)
+    for j in range(best_matches.size(0)):
+        cls_id = gt_labels[j].long()
+        target_preds[best_matches[j]] = cls_id
+        target_regs[best_matches[j]] = gt_boxes[j]
+
+    positive_mask[best_matches] = True
+
+    # set True if iou is higher than threshold given
+    pmask = max_iou_values >= positive_iou_threshold
+    for gt_idx in range(gt_boxes.size(0)):
+        target_preds[ pmask & (max_iou_ids == gt_idx) ] = gt_labels[gt_idx]
+        # TODO convert to offsets
+        target_regs[ pmask & (max_iou_ids == gt_idx) ] = gt_boxes[gt_idx]
+
+    positive_mask[max_iou_values >= positive_iou_threshold] = True
+    negative_mask[~positive_mask] = True 
+    negative_mask[:,1:] = False
+
+    # TODO vectorize
+    mask = torch.ones(nc, dtype=torch.bool, device=preds.device)
+    for i in range(positive_mask.size(0)):
+        cls_idx = target_preds[i][0].long()
+        mask[cls_idx] = False
+        positive_mask[i,mask] = False
+        target_preds[i,mask] = .0
+        mask[cls_idx] = True
+
+    return (positive_mask,negative_mask),(target_preds,target_regs)
 
 def build_targets(preds:torch.Tensor, regs:torch.Tensor, default_boxes:torch.Tensor,
         ignore_mask:torch.Tensor, targets:List, negative_iou_threshold:float=0.3,
@@ -210,6 +259,30 @@ def offsets2xyxy(offsets:torch.Tensor, anchors:torch.Tensor):
 
     return _vector2anchor(b_x_ctr,b_y_ctr,b_w,b_h)
 
+def resample_pos_neg_distribution_v2(positive_mask:torch.Tensor, negative_mask:torch.Tensor,
+        total_count:int=512, positive_ratio:float=.25):
+    # !
+    # TODO bs will cause error if bs > 1, fix it later
+    K = positive_mask.size(0)
+
+    n_positive_mask = torch.zeros(*(K,), dtype=torch.bool, device=positive_mask.device)
+    n_negative_mask = torch.zeros(*(K,), dtype=torch.bool, device=negative_mask.device)
+
+    # get indexes
+    positives,*_ = torch.where(positive_mask)
+    negatives,*_ = torch.where(negative_mask)
+
+    pos_count = int(total_count*positive_ratio)
+    positive_count = min(positives.size(0),pos_count)
+    negative_count = total_count-positive_count
+
+    picked_positives = np.random.choice(positives.cpu().numpy(), size=positive_count, replace=False)
+    picked_negatives = np.random.choice(negatives.cpu().numpy(), size=negative_count, replace=False)
+
+    n_positive_mask[picked_positives] = True
+    n_negative_mask[picked_negatives] = True
+
+    return n_positive_mask,n_negative_mask
 
 def resample_pos_neg_distribution(positive_mask:torch.Tensor, negative_mask:torch.Tensor,
         total_count:int=256, positive_ratio:float=.5):
