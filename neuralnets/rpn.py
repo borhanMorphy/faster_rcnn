@@ -95,7 +95,7 @@ class RPN(nn.Module):
             anchor_scales:List=[0.5,1,2], anchor_ratios:List=[0.5,1,2],
             train_iou_threshold:float=0.7, train_conf_threshold:float=0.0,
             train_keep_pre_nms:int=6000, train_keep_post_nms:int=2000,
-            test_iou_threshold:float=0.7, test_conf_threshold:float=0.1,
+            test_iou_threshold:float=0.7, test_conf_threshold:float=0.01,
             test_keep_pre_nms:int=6000, test_keep_post_nms:int=300,
             num_of_samples:int=256, positive_ratio:float=.5):
 
