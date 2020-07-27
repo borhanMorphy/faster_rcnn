@@ -7,13 +7,29 @@ from typing import List,Dict,Tuple
 from utils import (
     apply_box_regressions,
     build_targets_v2,
-    resample_pos_neg_distribution_v2
+    resample_pos_neg_distribution_v2,
+    jaccard_vectorized,
+    xyxy2offsets
 )
+from torchvision.models.detection import fasterrcnn_resnet50_fpn
+
+def draw_it(pboxes,tboxes):
+    import numpy as np
+    from cv2 import cv2
+    blank = np.ones((1000,1000,3),dtype=np.uint8) * 255
+
+    for (x11,y11,x12,y12),(x21,y21,x22,y22) in zip(pboxes.cpu().long().numpy(),tboxes.cpu().long().numpy()):
+        t_blank = blank.copy()
+        t_blank = cv2.rectangle(t_blank,(x11,y11),(x12,y12),(0,0,255),2)
+        t_blank = cv2.rectangle(t_blank,(x21,y21),(x22,y22),(0,255,0),2)
+        cv2.imshow("",t_blank)
+        cv2.waitKey(0)
 
 class FastRCNN(nn.Module):
     def __init__(self, num_classes:int, effective_stride:int,
-            output_size:int, features:int, hidden_channels:int=1024,
-            num_of_samples:int=128, positive_ratio:float=.5,
+            output_size:int, features:int, hidden_channels:int=1024, keep_n:int=100,
+            num_of_samples:int=512, positive_ratio:float=.25,
+            positive_iou_threshold:float=0.5, negative_iou_threshold:float=0.5,
             train_conf_threshold:float=.05, test_conf_threshold:float=.05):
         super(FastRCNN,self).__init__()
         self.num_classes = num_classes + 1 # adding background
@@ -40,8 +56,11 @@ class FastRCNN(nn.Module):
             'test':{
                 'conf_threshold':test_conf_threshold
             },
+            'positive_iou_threshold': positive_iou_threshold,
+            'negative_iou_threshold': negative_iou_threshold,
             'num_of_samples': num_of_samples,
-            'positive_ratio': positive_ratio
+            'positive_ratio': positive_ratio,
+            'keep_n':keep_n
         }
 
     def get_params(self):
@@ -55,6 +74,10 @@ class FastRCNN(nn.Module):
         rois = rois[0] # ! bs 1 assumed
 
         params = self.get_params()
+
+        if targets is not None:
+            # select and assign rois
+            rois,targets = self.select_training_samples(rois,targets[0])
         
         outputs = self.roi_pool(fmap, [rois]).flatten(start_dim=1) # N,C,H,W | [(M,4), ...] => K,(C*output_size[0]*output_size[1])
         outputs = self.hidden_unit(outputs) # K,hiddin_channels
@@ -89,46 +112,92 @@ class FastRCNN(nn.Module):
 
         if targets is not None:
             # * derivetive of rois is not needed
-            losses = self.compute_loss(preds,regs,rois.detach(),targets[0]) # ! assumed bs is 1
+            losses = self.compute_loss(preds,regs,rois,targets)
             return dets,losses
         return dets
 
+    def select_training_samples(self, rois:torch.Tensor, targets:Dict[str,torch.Tensor]):
+        # assumed bs is 1
+        """
+            rois: N,4
+            gt_boxes: M,4
+            gt_labels: M,
 
-    def compute_loss(self, preds:torch.Tensor, regs:torch.Tensor, rois:List[torch.Tensor],
-            targets:List[Dict[str,torch.Tensor]]) -> Dict[str,torch.Tensor]:
+            rois: S,4
+            target_regs: S,4
+            target_labels: S,
+        """
+        
+        gt_boxes = targets['boxes'].to(rois.device)
+        gt_labels = targets['labels'].to(rois.device)
+        N = rois.size(0)
 
-        (pos_mask,neg_mask),(t_preds,t_regs) = build_targets_v2(preds,regs,rois,targets)
+        fg_mask = torch.zeros(*(N,), dtype=torch.bool, device=rois.device)
+        bg_mask = torch.zeros(*(N,), dtype=torch.bool, device=rois.device)
+
+        target_regs = torch.zeros(*(N,4), dtype=rois.dtype, device=rois.device) - 1
+        target_labels = torch.zeros(*(N,), dtype=gt_labels.dtype, device=rois.device) - 1
+
+
+        # find positive candidates
+        ious = jaccard_vectorized(rois, gt_boxes) # => N,4 | M,4 => N,M
+        max_iou_values,max_iou_ids = ious.max(dim=-1)
+
+        # set fg if iou is higher than threshold given
+        pmask = max_iou_values >= self._params['positive_iou_threshold']
+        fg_mask[pmask] = True
+        for gt_idx in range(gt_boxes.size(0)):
+            target_labels[ pmask & (max_iou_ids == gt_idx) ] = gt_labels[gt_idx]
+            target_regs[ pmask & (max_iou_ids == gt_idx) ] = gt_boxes[gt_idx]
+
+        # set bg if iou is lower than threshold given
+        nmask = max_iou_values < self._params['negative_iou_threshold']
+        bg_mask[nmask] = True
+        target_labels[bg_mask] = 0 # set label as background
+
 
         selected_pos,selected_neg = resample_pos_neg_distribution_v2(
-            pos_mask, neg_mask, total_count=self._params['num_of_samples'],
+            fg_mask, bg_mask, total_count=self._params['num_of_samples'],
             positive_ratio=self._params['positive_ratio'])
 
-        pos_mask[~selected_pos] = False
-        neg_mask[~selected_neg] = False
+        fg_mask[~selected_pos] = False
+        bg_mask[~selected_neg] = False
+
+        target_labels = target_labels[ fg_mask | bg_mask ]
+        target_regs = target_regs[ fg_mask | bg_mask ]
+        rois = rois[ fg_mask | bg_mask ]
+
+        #! warning this might cause error since its calculated with bg indexes too
+        target_regs = xyxy2offsets(target_regs,rois)
+
+        targets = torch.cat([target_regs,target_labels.float().unsqueeze(-1)], dim=-1)
+
+        return rois,targets
+
+    def compute_loss(self, preds:torch.Tensor, regs:torch.Tensor, rois:torch.Tensor,
+            targets:torch.Tensor) -> Dict[str,torch.Tensor]:
+        S = preds.size(0)
+        nc = self.num_classes
+        fg_mask = targets[:,4] != 0
+        cls_mask = torch.zeros((S,nc), dtype=torch.bool, device=preds.device)
+        for i,cls_idx in enumerate(targets[:,4].long()):
+            cls_mask[i][cls_idx] = True
+
         #print(f"total positives: {pos_mask[pos_mask].size(0)} total negatives: {neg_mask[neg_mask].size(0)}")
         # preds[selected_pos | selected_neg] (num_of_samples,21) as float
         # t_preds[pos_mask | neg_mask] (num_of_samples,) as long
         # calculate cross entropy
-        weights = torch.ones(self.num_classes, device=preds.device)
-        weights[0] /= (self.num_classes-1)
-        cls_loss = F.cross_entropy(
-            preds[selected_pos | selected_neg],
-            t_preds[pos_mask | neg_mask].long(),
-            weight=weights)
+        cls_loss = F.cross_entropy(preds,targets[:,4].long())
 
         # calculate smooth l1 loss for bbox regression
-        if pos_mask[pos_mask].size(0) == 0:
+        if fg_mask[fg_mask].size(0) == 0:
             reg_loss = torch.tensor(0., requires_grad=True, dtype=regs.dtype, device=regs.device)
         else:
-            reg_loss = F.smooth_l1_loss(regs[pos_mask][:,0], t_regs[pos_mask][:,0]) +\
-                F.smooth_l1_loss(regs[pos_mask][:,1], t_regs[pos_mask][:,1]) +\
-                    F.smooth_l1_loss(regs[pos_mask][:,2], t_regs[pos_mask][:,2]) +\
-                        F.smooth_l1_loss(regs[pos_mask][:,3], t_regs[pos_mask][:,3])
+            reg_loss = F.smooth_l1_loss(regs[cls_mask][fg_mask], targets[fg_mask,:4], reduction='sum') / self.num_classes
 
         if torch.isnan(reg_loss):
             print("***********************************debug***********************************")
             print(targets,rois)
-            print(regs[pos_mask],t_regs[pos_mask])
             print("***********************************end***********************************")
         
         return {'cls_loss':cls_loss,'reg_loss':reg_loss}

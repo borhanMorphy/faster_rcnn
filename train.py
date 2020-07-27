@@ -47,8 +47,8 @@ def main():
     weight_decay = 5e-4
     total_iter_size = 60000
     num_classes = 20
-    features = 1280
-    effective_stride = 32
+    features = 256
+    effective_stride = 16
 
     ds_train = ds_factory("VOC_train", transforms=train_transforms, download=not os.path.isfile('./data/VOCtrainval_11-May-2012.tar'))
     dl_train = generate_dl(ds_train, batch_size=batch_size)
@@ -57,7 +57,7 @@ def main():
     ds_val = reduce_dataset(ds_val, ratio=0.05)
     dl_val = generate_dl(ds_val, batch_size=batch_size)
 
-    backbone = models.mobilenet_v2(pretrained=True).features
+    backbone = models.alexnet(pretrained=True).features[:-1]
 
     model = FasterRCNN(num_classes, backbone, features, effective_stride)
 
@@ -80,7 +80,7 @@ def main():
         # start training
         train_loop(model, dl_train, batch_size, epoch, epochs, optimizer, verbose, max_iter_count)
 
-        # save checkpoitn
+        # save checkpoint
         print("saving checkpoint...")
         torch.save(model.state_dict(), f"./faster_rcnn_epoch_{epoch+1}.pth")
 
