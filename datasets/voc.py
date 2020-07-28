@@ -23,8 +23,8 @@ class VOCDataset(VOCDetection):
         self._label_mapper = label_mapper
 
     def __getitem__(self, idx):
-        img,otargets = super().__getitem__(idx)
-        img = np.array(img) # convert PIL image => RGB numpy array
+        img,otargets = super().__getitem__(idx) # img: PIL.Image
+
         targets = {
             'boxes':[],
             'labels':[],

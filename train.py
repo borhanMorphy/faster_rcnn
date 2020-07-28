@@ -8,8 +8,13 @@ from tqdm import tqdm
 from torch.utils.data import DataLoader
 from typing import Dict
 import torch.nn.functional as F
-from utils.metrics import caclulate_means,roi_recalls,calculate_mAP
-from transforms import TrainTransforms
+from utils.metrics import (
+    caclulate_means,
+    roi_recalls,
+    calculate_mAP,
+    calculate_AP
+)
+from transforms import TrainTransforms,TestTransforms
 import os
 
 def load_latest_checkpoint(model):
@@ -37,6 +42,7 @@ def reduce_dataset(ds,ratio=0.1):
 def main():
     small_dim_size = 600
     train_transforms = TrainTransforms(small_dim_size=small_dim_size)
+    val_transforms = TestTransforms(small_dim_size=small_dim_size)
     debug = False # TODO add debug
     batch_size = 1
     epochs = 1
@@ -46,18 +52,18 @@ def main():
     momentum = 0.9
     weight_decay = 5e-4
     total_iter_size = 60000
-    num_classes = 20
-    features = 256
-    effective_stride = 16
+    num_classes = 21
+    features = 1280
+    effective_stride = 32
 
     ds_train = ds_factory("VOC_train", transforms=train_transforms, download=not os.path.isfile('./data/VOCtrainval_11-May-2012.tar'))
     dl_train = generate_dl(ds_train, batch_size=batch_size)
 
-    ds_val = ds_factory("VOC_val", transforms=train_transforms, download=not os.path.isfile('./data/VOCtrainval_11-May-2012.tar'))
-    ds_val = reduce_dataset(ds_val, ratio=0.05)
+    ds_val = ds_factory("VOC_val", transforms=val_transforms, download=not os.path.isfile('./data/VOCtrainval_11-May-2012.tar'))
+    ds_val = reduce_dataset(ds_val, ratio=0.1)
     dl_val = generate_dl(ds_val, batch_size=batch_size)
 
-    backbone = models.alexnet(pretrained=True).features[:-1]
+    backbone = models.mobilenet_v2(pretrained=True).features
 
     model = FasterRCNN(num_classes, backbone, features, effective_stride)
 
@@ -74,9 +80,6 @@ def main():
     epochs = int(total_iter_size / max_iter_count)
 
     for epoch in range(epochs):
-        # start validation
-        #validation_loop(model, dl_val, batch_size, epoch)
-
         # start training
         train_loop(model, dl_train, batch_size, epoch, epochs, optimizer, verbose, max_iter_count)
 
@@ -140,13 +143,13 @@ def validation_loop(model, dl, batch_size:int, epoch):
         head_predictions.append(dets['head']['predictions'])
         head_ground_truths.append(dets['head']['ground_truths'])
 
-    mAP = calculate_mAP(head_predictions, head_ground_truths, num_classes=model.num_classes, iou_threshold=0.5)
+    AP = calculate_AP(head_predictions, head_ground_truths, iou_threshold=0.5)
 
     print(f"--validation results for epoch {epoch+1} --")
     print(f"RPN mean recall at iou thresholds are:")
     for iou_threshold,rpn_recall in zip(iou_thresholds.cpu().numpy(),rpn_recalls.cpu().numpy()*100):
         print(f"IoU={iou_threshold:.02f} recall={int(rpn_recall)}")
-    print(f"HEAD mAP score={int(mAP*100)} at IoU=0.5")
+    print(f"HEAD AP score={int(AP*100)} at IoU=0.5")
     print("--------------------------------------------")
 
 def tensor2img(batch):

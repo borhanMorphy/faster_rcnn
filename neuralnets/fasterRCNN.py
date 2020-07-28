@@ -13,7 +13,7 @@ class FasterRCNN(nn.Module):
             rpn_kernel_size:int=3, anchor_scales:List=[0.5,1,2],
             anchor_ratios:List=[0.5,1,2]):
         super(FasterRCNN,self).__init__()
-        self.num_classes = num_classes+1
+        self.num_classes = num_classes
 
         self.backbone = backbone
 
@@ -73,7 +73,8 @@ class FasterRCNN(nn.Module):
         losses['loss'] = joint_loss
 
         roi_targets = targets[0]['boxes'].cpu() # K,4
-        det_targets = torch.cat([targets[0]['boxes'].cpu(), targets[0]['labels'].float().unsqueeze(-1).cpu()], dim=-1)
+        #det_targets = torch.cat([targets[0]['boxes'].cpu(), targets[0]['labels'].float().unsqueeze(-1).cpu()], dim=-1)
+        det_targets = targets[0]['boxes'].cpu()
 
         detections = {
             'rpn': {
@@ -81,7 +82,8 @@ class FasterRCNN(nn.Module):
                 'ground_truths': roi_targets
             },
             'head':{
-                'predictions': dets.cpu(),
+                #'predictions': dets.cpu(),
+                'predictions': dets[:,:5].cpu(),
                 'ground_truths': det_targets
             }
         }
@@ -94,7 +96,7 @@ class FasterRCNN_RPN(nn.Module):
             rpn_kernel_size:int=3, anchor_scales:List=[0.5,1,2],
             anchor_ratios:List=[0.5,1,2]):
         super(FasterRCNN_RPN,self).__init__()
-        self.num_classes = num_classes+1
+        self.num_classes = num_classes
 
         self.backbone = backbone
 

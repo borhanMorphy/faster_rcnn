@@ -54,14 +54,16 @@ def main():
     dl_train = generate_dl(ds_train, batch_size=batch_size)
 
     ds_val = ds_factory("VOC_val", transforms=train_transforms, download=not os.path.isfile('./data/VOCtrainval_11-May-2012.tar'))
-    ds_val = reduce_dataset(ds_val, ratio=0.05)
+    ds_val = reduce_dataset(ds_val, ratio=0.01)
     dl_val = generate_dl(ds_val, batch_size=batch_size)
 
-    backbone = models.vgg16_bn(pretrained=True).features[:-1]
+    backbone = models.vgg16(pretrained=True).features[:-1]
 
     model = FasterRCNN_RPN(num_classes, backbone, features, effective_stride)
 
-    load_latest_checkpoint(model)
+    #load_latest_checkpoint(model)
+    st = torch.load('rpn_pretrained.pth')
+    model.load_state_dict(st)
 
     model.to('cuda')
 
@@ -74,6 +76,9 @@ def main():
     epochs = int(total_iter_size / max_iter_count)
 
     for epoch in range(epochs):
+        # start validation
+        validation_loop(model, dl_val, batch_size, epoch)
+
         # start training
         train_loop(model, dl_train, batch_size, epoch, epochs, optimizer, verbose, max_iter_count)
 

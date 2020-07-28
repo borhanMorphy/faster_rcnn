@@ -108,7 +108,7 @@ class FastRCNN(nn.Module):
         #cls_ids = cls_ids[pick]
         #cls_scores = cls_scores[pick]
         # T,4 | T,1 | T,1 => T,6
-        dets = torch.cat([boxes,cls_ids,cls_scores], dim=-1)
+        dets = torch.cat([boxes,cls_scores,cls_ids], dim=-1)
 
         if targets is not None:
             # * derivetive of rois is not needed
