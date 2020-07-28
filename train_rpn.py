@@ -46,7 +46,7 @@ def main():
     momentum = 0.9
     weight_decay = 5e-4
     total_iter_size = 60000
-    num_classes = 20
+    num_classes = 21
     features = 512
     effective_stride = 16
 

@@ -32,7 +32,7 @@ class FastRCNN(nn.Module):
             positive_iou_threshold:float=0.5, negative_iou_threshold:float=0.5,
             train_conf_threshold:float=.05, test_conf_threshold:float=.05):
         super(FastRCNN,self).__init__()
-        self.num_classes = num_classes + 1 # adding background
+        self.num_classes = num_classes # including background
         self.effective_stride = effective_stride
         self.roi_pool = RoIPool(output_size,1.0)
         self.hidden_unit = nn.Sequential(
@@ -99,14 +99,15 @@ class FastRCNN(nn.Module):
         boxes = apply_box_regressions(offsets.unsqueeze(0), rois).squeeze(0) # ! assumed bs is 1
         pick = cls_scores >= params['conf_threshold']
         boxes = boxes[pick & ignore_bg]
-        cls_ids = cls_ids[pick & ignore_bg].float().unsqueeze(-1)
-        cls_scores = cls_scores[pick & ignore_bg].unsqueeze(-1)
+        cls_ids = cls_ids[pick & ignore_bg]
+        cls_scores = cls_scores[pick & ignore_bg]
 
 
-        #pick = batched_nms(boxes,cls_scores,cls_ids,iou_threshold)
-        #boxes = boxes[pick]
-        #cls_ids = cls_ids[pick]
-        #cls_scores = cls_scores[pick]
+        pick = batched_nms(boxes,cls_scores,cls_ids,0.5)
+        pick = pick[:100]
+        boxes = boxes[pick]
+        cls_ids = cls_ids[pick].float().unsqueeze(-1)
+        cls_scores = cls_scores[pick].unsqueeze(-1)
         # T,4 | T,1 | T,1 => T,6
         dets = torch.cat([boxes,cls_scores,cls_ids], dim=-1)
 

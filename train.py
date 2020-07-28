@@ -149,7 +149,7 @@ def validation_loop(model, dl, batch_size:int, epoch):
     print(f"RPN mean recall at iou thresholds are:")
     for iou_threshold,rpn_recall in zip(iou_thresholds.cpu().numpy(),rpn_recalls.cpu().numpy()*100):
         print(f"IoU={iou_threshold:.02f} recall={int(rpn_recall)}")
-    print(f"HEAD AP score={int(AP*100)} at IoU=0.5")
+    print(f"HEAD AP score={AP*100:.02f} at IoU=0.5")
     print("--------------------------------------------")
 
 def tensor2img(batch):
