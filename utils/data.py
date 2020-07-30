@@ -1,8 +1,14 @@
 import torch
 from cv2 import cv2
+import numpy as np
 
 
 def load_data(img_path:str):
     oimg = cv2.imread(img_path)
     data = cv2.cvtColor(oimg, cv2.COLOR_BGR2RGB)
     return (torch.from_numpy(data).float() / 255).permute(2,0,1).unsqueeze(0),oimg
+
+
+def tensor2img(batch):
+    imgs = (batch.permute(0,2,3,1).cpu() * 255).numpy().astype(np.uint8)
+    return [cv2.cvtColor(img,cv2.COLOR_RGB2BGR) for img in imgs]
