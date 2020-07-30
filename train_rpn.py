@@ -40,7 +40,7 @@ def main():
     train_transforms = TrainTransforms(small_dim_size=small_dim_size)
     val_trainsforms = TestTransforms(small_dim_size=small_dim_size)
 
-    batch_size = 1
+    batch_size = 5
     epochs = 1
 
     # !defined in the paper
@@ -127,7 +127,7 @@ def validation_loop(model, dl, batch_size:int, epoch):
         batch,targets = move_to_gpu(batch,targets)
 
         detections,losses = model.validation_step(batch, targets)
-
+        #draw_it(batch[0],detections['predictions'],detections['ground_truths'])
         all_detections.append(detections)
         all_losses.append(losses)
 
@@ -151,6 +151,24 @@ def validation_loop(model, dl, batch_size:int, epoch):
     for k,v in means.items():
         print(f"{k}: {v:.4f}")
     print("--------------------------------------------")
+
+def draw_it(batch,detections,gt_boxes):
+    from torchvision.ops import boxes as box_utils
+    ious = box_utils.box_iou(detections[0][:,:4],gt_boxes[0])
+    vals,ids = ious.max(dim=0)
+    print(vals)
+    from utils.data import tensor2img
+    img = tensor2img(batch)[0]
+    boxes = detections[0][ids].cpu().long().numpy()
+    gt_boxes = gt_boxes[0].cpu().long().numpy()
+    from cv2 import cv2
+    for x1,y1,x2,y2 in boxes[:,:4]:
+        img = cv2.rectangle(img,(x1,y1),(x2,y2),(0,0,255),1)
+    for x1,y1,x2,y2 in gt_boxes:
+        img = cv2.rectangle(img,(x1,y1),(x2,y2),(0,255,0),2)
+    
+    cv2.imshow("",img)
+    cv2.waitKey(0)
 
 if __name__ == "__main__":
     torch.autograd.set_detect_anomaly(True)
