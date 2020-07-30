@@ -66,7 +66,7 @@ def main():
 
     model.to('cuda')
 
-    verbose = 20
+    verbose = 50
     optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate,
         momentum=momentum, weight_decay=weight_decay)
 
