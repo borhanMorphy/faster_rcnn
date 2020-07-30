@@ -360,7 +360,7 @@ class RPN(nn.Module):
 
     @torch.no_grad()
     def validation_step(self, images:List[torch.Tensor], targets:List[Dict[str,torch.Tensor]]):
-        batched_rois = self.forward(images, targets=targets)
+        batched_rois,losses = self.forward(images, targets=targets)
 
         roi_targets = [target['boxes'].cpu() for target in targets] # K,4
 
@@ -370,57 +370,3 @@ class RPN(nn.Module):
         }
         
         return detections
-
-
-    """
-    def compute_loss(self, preds:torch.Tensor, regs:torch.Tensor,
-            img_dims:Tuple, targets:List[Dict[str,torch.Tensor]]) -> Dict[str,torch.Tensor]:
-        #Computes losses for cls and reg
-
-        Args:
-            preds (torch.Tensor): bs x fmap_h x fmap_w x num_anchors
-            regs (torch.Tensor): bs x fmap_h x fmap_w x num_anchors x 4
-            img_dims (Tuple): height,width
-            targets (List[Dict[str,torch.Tensor]]): [
-                {
-                    'boxes':torch.Tensor(M,4), # as xmin,ymin,xmax,ymax
-                    'labels':torch.Tensor(M,)  # as torch.int64 (Long)
-                },
-                {
-                    'boxes':torch.Tensor(M,4), # as xmin,ymin,xmax,ymax
-                    'labels':torch.Tensor(M,)  # as torch.int64 (Long)
-                },
-                ...
-            ]
-
-        Returns:
-            Dict[str,torch.Tensor]: {'cls_loss', cls_loss, 'reg_loss': reg_loss}
-        #
-
-        ignore_mask = get_ignore_mask(self.detection_layer.default_boxes, img_dims)
-
-        # * t_preds not used since classes only contains {BG|FG} for RPN
-        (pos_mask,neg_mask),(t_objness,t_preds,t_regs) = build_targets(
-            preds,regs, self.detection_layer.default_boxes, ignore_mask, targets)
-
-        # resample positive and negatives to have ratio of 1:1 (pad with negatives if needed)
-        pos_mask,neg_mask = resample_pos_neg_distribution(
-            pos_mask, neg_mask, total_count=self._params['num_of_samples'],
-            positive_ratio=self._params['positive_ratio'])
-
-        # calculate binary cross entropy with logits
-        cls_loss = F.binary_cross_entropy_with_logits(
-            preds[pos_mask | neg_mask], t_objness[pos_mask | neg_mask])
-
-        # calculate smooth l1 loss for bbox regression
-        if pos_mask[pos_mask].size(0) == 0:
-            reg_loss = torch.tensor(0., requires_grad=True, dtype=regs.dtype, device=regs.device)
-        else:
-            reg_loss = F.smooth_l1_loss(regs[pos_mask][:,0], t_regs[pos_mask][:,0]) +\
-                F.smooth_l1_loss(regs[pos_mask][:,1], t_regs[pos_mask][:,1]) +\
-                    F.smooth_l1_loss(regs[pos_mask][:,2], t_regs[pos_mask][:,2]) +\
-                        F.smooth_l1_loss(regs[pos_mask][:,3], t_regs[pos_mask][:,3])
-
-
-        return {'cls_loss':cls_loss,'reg_loss':reg_loss}
-    """
