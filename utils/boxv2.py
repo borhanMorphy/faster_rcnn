@@ -103,25 +103,24 @@ def boxes2offsets(boxes:torch.Tensor, anchors:torch.Tensor):
     Returns:
         deltas torch.Tensor(N,4): as dx,dy,dw,dh
     """
-    eps = 1e-8
+    eps = 1e-16
     anchors = anchors.to(boxes.device)
-    wa = anchors[:, 2::4] - anchors[:, 0::4]
-    ha = anchors[:, 3::4] - anchors[:, 1::4]
-    cxa = anchors[:, 0::4] + .5 * wa
-    cya = anchors[:, 1::4] + .5 * ha
+    wa = anchors[:, 2] - anchors[:, 0]
+    ha = anchors[:, 3] - anchors[:, 1]
+    cxa = anchors[:, 0] + .5 * wa
+    cya = anchors[:, 1] + .5 * ha
 
-    w = boxes[:, 2::4] - boxes[:, 0::4]
-    h = boxes[:, 3::4] - boxes[:, 1::4]
-    cx = boxes[:, 0::4] + .5 * w
-    cy = boxes[:, 1::4] + .5 * h
-
+    w = boxes[:, 2] - boxes[:, 0]
+    h = boxes[:, 3] - boxes[:, 1]
+    cx = boxes[:, 0] + .5 * w
+    cy = boxes[:, 1] + .5 * h
 
     dx = (cx - cxa) / wa
     dy = (cy - cya) / ha
     dw = torch.log(w / wa + eps)
     dh = torch.log(h / ha + eps)
 
-    return torch.cat([dx,dy,dw,dh], dim=-1)
+    return torch.stack([dx,dy,dw,dh], dim=-1)
 
 if __name__ == "__main__":
     anchor_generator = AnchorGenerator([128,256,512],[0.5,1,2])

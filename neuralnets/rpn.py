@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from typing import Dict,List,Tuple
 from torchvision.ops import boxes as box_ops
 from cv2 import cv2
+import numpy as np
 
 from utils.boxv2 import offsets2boxes, AnchorGenerator, boxes2offsets
 
@@ -217,16 +218,20 @@ class RPNHead(nn.Module):
                 mask = best_matches == i
                 target_offsets[mask] = box
 
-            # convert boxes to offsets
-            target_offsets = boxes2offsets(target_offsets, anchors)
-
+            pos_mask = matches == 1
             # set fg label for objectness
-            target_objectness[ matches == 1 ] = 1 
+            target_objectness[ pos_mask ] = 1
+ 
+            # convert boxes to offsets
+            target_offsets[pos_mask] = boxes2offsets(target_offsets[pos_mask], anchors[pos_mask])
 
             batch_matches.append(matches)
             batch_target_objectness.append(target_objectness)
             batch_target_offsets.append(target_offsets)
 
+            #t_mask = matches == 1
+            #print("geldi",anchors[t_mask].shape,gt_boxes.shape)
+            #draw_it(anchors[t_mask], gt_boxes)
         batch_matches = torch.cat(batch_matches, dim=0)
         batch_target_objectness = torch.cat(batch_target_objectness, dim=0)
         batch_target_offsets = torch.cat(batch_target_offsets, dim=0)
@@ -244,10 +249,10 @@ class RPNHead(nn.Module):
         num_pos = min(int(total_samples * positive_ratio), num_pos)
         num_neg = min(total_samples-num_pos, num_neg)
 
-        positives = torch.randperm(positives.size(0), device=positives.device)[:num_pos]
-        negatives = torch.randperm(negatives.size(0), device=negatives.device)[:num_neg]
+        selected_pos = torch.randperm(positives.size(0), device=positives.device)[:num_pos]
+        selected_neg = torch.randperm(negatives.size(0), device=negatives.device)[:num_neg]
 
-        return positives,negatives
+        return positives[selected_pos],negatives[selected_neg]
 
     def get_params(self):
         if self.training:
@@ -374,3 +379,16 @@ class RPN(nn.Module):
         }
         
         return detections,losses
+
+
+def draw_it(anchors,gt_boxes):
+    a = anchors.cpu().long().numpy()
+    t = gt_boxes.cpu().long().numpy()
+    bg = (np.ones((1000,1000,3)) * 255).astype(np.uint8)
+    for x1,y1,x2,y2 in t:
+        bg = cv2.rectangle(bg, (x1,y1),(x2,y2),(0,255,0),2)
+
+    for x1,y1,x2,y2 in a:
+        b = cv2.rectangle(bg.copy(), (x1,y1),(x2,y2),(0,0,255),1)
+        cv2.imshow("",b)
+        cv2.waitKey(0)

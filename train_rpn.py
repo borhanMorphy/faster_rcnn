@@ -40,7 +40,7 @@ def main():
     train_transforms = TrainTransforms(small_dim_size=small_dim_size)
     val_trainsforms = TestTransforms(small_dim_size=small_dim_size)
 
-    batch_size = 5
+    batch_size = 3
     epochs = 1
 
     # !defined in the paper
@@ -54,7 +54,7 @@ def main():
     dl_train = generate_dl(ds_train, batch_size=batch_size)
 
     ds_val = ds_factory("VOC_val", transforms=val_trainsforms, download=not os.path.isfile('./data/VOCtrainval_11-May-2012.tar'))
-    ds_val = reduce_dataset(ds_val, ratio=0.1)
+    ds_val = reduce_dataset(ds_val, ratio=0.05)
     dl_val = generate_dl(ds_val, batch_size=batch_size)
 
     backbone = models.mobilenet_v2(pretrained=True).features
@@ -66,7 +66,7 @@ def main():
 
     model.to('cuda')
 
-    verbose = 50
+    verbose = 20
     optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate,
         momentum=momentum, weight_decay=weight_decay)
 
