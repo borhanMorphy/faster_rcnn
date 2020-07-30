@@ -220,7 +220,7 @@ class RPNHead(nn.Module):
             # convert boxes to offsets
             target_offsets = boxes2offsets(target_offsets, anchors)
 
-            # set background label for objectness
+            # set fg label for objectness
             target_objectness[ matches == 1 ] = 1 
 
             batch_matches.append(matches)
@@ -363,10 +363,14 @@ class RPN(nn.Module):
         batched_rois,losses = self.forward(images, targets=targets)
 
         roi_targets = [target['boxes'].cpu() for target in targets] # K,4
+        losses['loss'] = losses['rpn_cls_loss'] + losses['rpn_reg_loss']
+
+        for k in losses:
+            losses[k] = losses[k].detach().item()
 
         detections = {
             'predictions': [rois.cpu() for rois in batched_rois],
             'ground_truths': roi_targets
         }
         
-        return detections
+        return detections,losses

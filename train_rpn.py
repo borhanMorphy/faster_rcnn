@@ -122,12 +122,14 @@ def validation_loop(model, dl, batch_size:int, epoch):
     model.eval()
     print("running validation...")
     all_detections = []
+    all_losses = []
     for batch,targets in tqdm(dl, total=total_val_iter):
         batch,targets = move_to_gpu(batch,targets)
 
-        detections = model.validation_step(batch, targets)
+        detections,losses = model.validation_step(batch, targets)
 
         all_detections.append(detections)
+        all_losses.append(losses)
 
     # evalute RPN
     iou_thresholds = torch.arange(0.5, 1.0, 0.05)
@@ -138,13 +140,16 @@ def validation_loop(model, dl, batch_size:int, epoch):
         rpn_ground_truths += dets['ground_truths']
 
     rpn_recalls = roi_recalls(rpn_predictions, rpn_ground_truths, iou_thresholds=iou_thresholds)
+    ap = calculate_AP(rpn_predictions,rpn_ground_truths,iou_threshold=0.5)
+    means = caclulate_means(all_losses)
 
     print(f"--validation results for epoch {epoch+1} --")
     print(f"RPN mean recall at iou thresholds are:")
     for iou_threshold,rpn_recall in zip(iou_thresholds.cpu().numpy(),rpn_recalls.cpu().numpy()*100):
         print(f"IoU={iou_threshold:.02f} recall={int(rpn_recall)}")
-    ap = calculate_AP(rpn_predictions,rpn_ground_truths,iou_threshold=0.5)
     print(f"AP score: {100*ap:.02f}")
+    for k,v in means.items():
+        print(f"{k}: {v:.4f}")
     print("--------------------------------------------")
 
 if __name__ == "__main__":
