@@ -40,7 +40,7 @@ def main():
     train_transforms = TrainTransforms(small_dim_size=small_dim_size)
     val_trainsforms = TestTransforms(small_dim_size=small_dim_size)
 
-    batch_size = 4
+    batch_size = 1
     epochs = 1
 
     # !defined in the paper
