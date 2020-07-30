@@ -143,6 +143,8 @@ def validation_loop(model, dl, batch_size:int, epoch):
     print(f"RPN mean recall at iou thresholds are:")
     for iou_threshold,rpn_recall in zip(iou_thresholds.cpu().numpy(),rpn_recalls.cpu().numpy()*100):
         print(f"IoU={iou_threshold:.02f} recall={int(rpn_recall)}")
+    ap = calculate_AP(rpn_predictions,rpn_ground_truths,iou_threshold=0.5)
+    print(f"AP score: {100*ap:.02f}")
     print("--------------------------------------------")
 
 if __name__ == "__main__":
