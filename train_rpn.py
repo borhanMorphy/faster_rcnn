@@ -54,7 +54,7 @@ def main():
     dl_train = generate_dl(ds_train, batch_size=batch_size)
 
     ds_val = ds_factory("VOC_val", transforms=val_trainsforms, download=not os.path.isfile('./data/VOCtrainval_11-May-2012.tar'))
-    ds_val = reduce_dataset(ds_val, ratio=0.05)
+    ds_val = reduce_dataset(ds_val, ratio=0.1)
     dl_val = generate_dl(ds_val, batch_size=batch_size)
 
     backbone = models.mobilenet_v2(pretrained=True).features
