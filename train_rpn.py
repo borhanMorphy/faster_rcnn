@@ -75,15 +75,15 @@ def main():
     epochs = int(total_iter_size / max_iter_count)
 
     for epoch in range(epochs):
+        # start validation
+        validation_loop(model, dl_val, batch_size, epoch)
+
         # start training
         train_loop(model, dl_train, batch_size, epoch, epochs, optimizer, verbose, max_iter_count)
 
         # save checkpoint
         print("saving checkpoint...")
         torch.save(model.state_dict(), f"./rpn_checkpoint_epoch_{epoch+1}.pth")
-
-        # start validation
-        validation_loop(model, dl_val, batch_size, epoch)
 
 def move_to_gpu(batch:List[torch.Tensor], targets:List[Dict[str,torch.Tensor]]):
     for i in range(len(batch)):
