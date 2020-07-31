@@ -15,6 +15,11 @@ from utils.metrics import (
     calculate_AP
 )
 from transforms import TrainTransforms,TestTransforms
+from utils import (
+    move_to_gpu,
+    generate_dl,
+    reduce_dataset
+)
 import os
 
 def load_latest_checkpoint(model):
@@ -24,26 +29,10 @@ def load_latest_checkpoint(model):
         model.load_state_dict( torch.load(checkpoint, map_location='cpu') )
         return
 
-def custom_collate_fn(batch):
-    batch,targets = zip(*batch)
-    return torch.cat(batch,dim=0),targets
-
-def generate_dl(ds, batch_size:int=1, collate_fn=custom_collate_fn,
-        num_workers:int=1, pin_memory:bool=True, **kwargs):
-
-    return DataLoader(ds, batch_size=batch_size, collate_fn=custom_collate_fn,
-        num_workers=num_workers, pin_memory=True, **kwargs)
-
-def reduce_dataset(ds,ratio=0.1):
-    size = int(len(ds)*ratio)
-    rest = len(ds)-size
-    return torch.utils.data.random_split(ds, [size,rest])[0]
-
 def main():
     small_dim_size = 600
     train_transforms = TrainTransforms(small_dim_size=small_dim_size)
     val_transforms = TestTransforms(small_dim_size=small_dim_size)
-    debug = False # TODO add debug
     batch_size = 1
     epochs = 1
 
@@ -53,8 +42,6 @@ def main():
     weight_decay = 5e-4
     total_iter_size = 60000
     num_classes = 21
-    features = 1280
-    effective_stride = 32
 
     ds_train = ds_factory("VOC_train", transforms=train_transforms, download=not os.path.isfile('./data/VOCtrainval_11-May-2012.tar'))
     dl_train = generate_dl(ds_train, batch_size=batch_size)
@@ -64,8 +51,9 @@ def main():
     dl_val = generate_dl(ds_val, batch_size=batch_size)
 
     backbone = models.mobilenet_v2(pretrained=True).features
+    backbone.output_channels = 1280
 
-    model = FasterRCNN(num_classes, backbone, features, effective_stride)
+    model = FasterRCNN(backbone,num_classes)
 
     load_latest_checkpoint(model)
 
@@ -80,6 +68,9 @@ def main():
     epochs = int(total_iter_size / max_iter_count)
 
     for epoch in range(epochs):
+        # start validation
+        validation_loop(model, dl_val, batch_size, epoch)
+
         # start training
         train_loop(model, dl_train, batch_size, epoch, epochs, optimizer, verbose, max_iter_count)
 
@@ -87,16 +78,15 @@ def main():
         print("saving checkpoint...")
         torch.save(model.state_dict(), f"./faster_rcnn_epoch_{epoch+1}.pth")
 
-        # start validation
-        validation_loop(model, dl_val, batch_size, epoch)
-
 def train_loop(model, dl, batch_size:int, epoch, epochs, optimizer, verbose, max_iter_count):
     running_metrics = []
     print(f"running epoch [{epoch+1}/{epochs}]")
     model.train()
     for iter_count,(batch,targets) in enumerate(dl):
+        batch,targets = move_to_gpu(batch,targets)
+
         optimizer.zero_grad()
-        metrics = model.training_step(batch.cuda(), targets)
+        metrics = model.training_step(batch, targets)
         metrics['loss'].backward()
         optimizer.step()
 
@@ -119,11 +109,13 @@ def validation_loop(model, dl, batch_size:int, epoch):
     model.eval()
     print("running validation...")
     all_detections = []
-    all_metrics = []
+    all_losses = []
     for batch,targets in tqdm(dl, total=total_val_iter):
-        metrics,detections = model.validation_step(batch.cuda(), targets)
+        batch,targets = move_to_gpu(batch,targets)
+
+        detections,losses = model.validation_step(batch, targets)
         
-        all_metrics.append(metrics)
+        all_losses.append(losses)
         all_detections.append(detections)
 
     # evalute RPN
@@ -131,8 +123,8 @@ def validation_loop(model, dl, batch_size:int, epoch):
     rpn_predictions = []
     rpn_ground_truths = []
     for dets in all_detections:
-        rpn_predictions.append(dets['rpn']['predictions'])
-        rpn_ground_truths.append(dets['rpn']['ground_truths'])
+        rpn_predictions += dets['rpn']['predictions']
+        rpn_ground_truths += dets['rpn']['ground_truths']
 
     rpn_recalls = roi_recalls(rpn_predictions, rpn_ground_truths, iou_thresholds=iou_thresholds)
 
@@ -140,16 +132,19 @@ def validation_loop(model, dl, batch_size:int, epoch):
     head_predictions = []
     head_ground_truths = []
     for dets in all_detections:
-        head_predictions.append(dets['head']['predictions'])
-        head_ground_truths.append(dets['head']['ground_truths'])
+        head_predictions += dets['head']['predictions']
+        head_ground_truths += dets['head']['ground_truths']
 
     AP = calculate_AP(head_predictions, head_ground_truths, iou_threshold=0.5)
+    means = caclulate_means(all_losses)
 
     print(f"--validation results for epoch {epoch+1} --")
     print(f"RPN mean recall at iou thresholds are:")
     for iou_threshold,rpn_recall in zip(iou_thresholds.cpu().numpy(),rpn_recalls.cpu().numpy()*100):
         print(f"IoU={iou_threshold:.02f} recall={int(rpn_recall)}")
     print(f"HEAD AP score={AP*100:.02f} at IoU=0.5")
+    for k,v in means.items():
+        print(f"{k}: {v:.4f}")
     print("--------------------------------------------")
 
 def tensor2img(batch):

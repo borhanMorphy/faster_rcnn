@@ -14,9 +14,10 @@ from utils.metrics import (
     calculate_mAP,
     calculate_AP
 )
-from utils import reduce_dataset
+from utils import reduce_dataset, generate_dl
 from transforms.preprocess import TrainTransforms,TestTransforms
 import os
+from utils.data import move_to_gpu
 
 def load_latest_checkpoint(model):
     checkpoints = [f_name for f_name in os.listdir() if f_name.endswith('.pth') and 'rpn' in f_name]
@@ -24,16 +25,6 @@ def load_latest_checkpoint(model):
         print(f"found checkpoint {checkpoint}")
         model.load_state_dict( torch.load(checkpoint, map_location='cpu') )
         return
-
-def custom_collate_fn(batch):
-    images,targets = zip(*batch)
-    return images,targets
-
-def generate_dl(ds, batch_size:int=1, collate_fn=custom_collate_fn,
-        num_workers:int=1, pin_memory:bool=True, **kwargs):
-
-    return DataLoader(ds, batch_size=batch_size, collate_fn=custom_collate_fn,
-        num_workers=num_workers, pin_memory=True, **kwargs)
 
 def main():
     small_dim_size = 600
@@ -84,13 +75,6 @@ def main():
         # save checkpoint
         print("saving checkpoint...")
         torch.save(model.state_dict(), f"./rpn_checkpoint_epoch_{epoch+1}.pth")
-
-def move_to_gpu(batch:List[torch.Tensor], targets:List[Dict[str,torch.Tensor]]):
-    for i in range(len(batch)):
-        batch[i] = batch[i].cuda()
-        targets[i]['boxes'] = targets[i]['boxes'].cuda()
-        targets[i]['labels'] = targets[i]['labels'].cuda()
-    return batch,targets
 
 def train_loop(model, dl, batch_size:int, epoch, epochs, optimizer, verbose, max_iter_count):
     running_metrics = []

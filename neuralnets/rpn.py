@@ -5,8 +5,13 @@ from typing import Dict,List,Tuple
 from torchvision.ops import boxes as box_ops
 from cv2 import cv2
 import numpy as np
-
-from utils.boxv2 import offsets2boxes, AnchorGenerator, boxes2offsets
+from utils import (
+    offsets2boxes,
+    boxes2offsets,
+    AnchorGenerator,
+    build_targets,
+    sample_fg_bg
+)
 
 class PredictionLayer(nn.Module):
     def __init__(self, num_anchors:int, backbone_features:int, n:int=3):
@@ -163,97 +168,6 @@ class RPNHead(nn.Module):
                 batch_size_per_image,batch_positive_ratio,
                 fg_iou_threshold,bg_iou_threshold,nms_threshold)))
 
-    @staticmethod
-    def build_targets(batched_anchors:List[torch.Tensor],
-            targets:List[Dict[str,torch.Tensor]],
-            pos_iou_tresh:float, neg_iou_tresh:float,
-            add_best_matches:bool=True) -> Tuple[torch.Tensor,torch.Tensor,torch.Tensor]:
-        """
-        Params:
-
-        Returns:
-            matches torch.Tensor: Ntotal,
-            target_objectness torch.Tensor : Ntotal, 
-            target_offsets torch.Tensor : Ntotal, 4
-        """
-        batch_matches:List[torch.Tensor] = []
-        batch_target_objectness:List[torch.Tensor] = []
-        batch_target_offsets:List[torch.Tensor] = []
-
-        for anchors,targets_per_image in zip(batched_anchors,targets):
-            device = anchors.device
-            dtype = anchors.dtype
-
-            gt_boxes = targets_per_image['boxes'].to(device, dtype)
-            # ignored due to only objectness score is required
-            gt_labels = targets_per_image['labels'].to(device, torch.int64)
-
-            N = anchors.size(0)
-            M = gt_boxes.size(0)
-            # -1: negative match | 0: ignore | 1: positive match
-            matches = torch.zeros(N, dtype=dtype, device=device)
-            target_objectness = torch.zeros(N, dtype=dtype, device=device)
-            target_offsets = torch.zeros(N,4 , dtype=dtype, device=device)
-
-            if M == 0:
-                batch_matches.append(matches)
-                batch_target_objectness.append(target_objectness)
-                batch_target_offsets.append(target_offsets)
-                continue
-
-            ious = box_ops.box_iou(anchors,gt_boxes) # N,M
-            # best_values: N,
-            # best_matches: N,
-            best_values,best_matches = ious.max(dim=1)
-            # best_anchor_match_ids: M,
-            _, best_anchor_match_ids = ious.max(dim=0)
-
-            matches[best_values >= pos_iou_tresh] = 1
-            matches[best_values <= neg_iou_tresh] = -1
-
-            if add_best_matches: matches[best_anchor_match_ids] = 1
-
-            for i in range(M):
-                box = gt_boxes[i]
-                mask = best_matches == i
-                target_offsets[mask] = box
-
-            pos_mask = matches == 1
-            # set fg label for objectness
-            target_objectness[ pos_mask ] = 1
- 
-            # convert boxes to offsets
-            target_offsets[pos_mask] = boxes2offsets(target_offsets[pos_mask], anchors[pos_mask])
-
-            batch_matches.append(matches)
-            batch_target_objectness.append(target_objectness)
-            batch_target_offsets.append(target_offsets)
-
-            #t_mask = matches == 1
-            #print("geldi",anchors[t_mask].shape,gt_boxes.shape)
-            #draw_it(anchors[t_mask], gt_boxes)
-        batch_matches = torch.cat(batch_matches, dim=0)
-        batch_target_objectness = torch.cat(batch_target_objectness, dim=0)
-        batch_target_offsets = torch.cat(batch_target_offsets, dim=0)
-
-        return batch_matches, batch_target_objectness, batch_target_offsets
-
-    @staticmethod
-    def sample_fg_bg(matches, total_samples:int, positive_ratio:float):
-        positives, = torch.where(matches == 1)
-        negatives, = torch.where(matches == -1)
-
-        num_pos = positives.size(0)
-        num_neg = negatives.size(0)
-
-        num_pos = min(int(total_samples * positive_ratio), num_pos)
-        num_neg = min(total_samples-num_pos, num_neg)
-
-        selected_pos = torch.randperm(positives.size(0), device=positives.device)[:num_pos]
-        selected_neg = torch.randperm(negatives.size(0), device=negatives.device)[:num_neg]
-
-        return positives[selected_pos],negatives[selected_neg]
-
     def get_params(self):
         if self.training:
             return self._params['train'],self._params['others']
@@ -285,11 +199,13 @@ class RPNHead(nn.Module):
             reg_deltas = torch.cat(reg_deltas, dim=1).reshape(-1,4)
                         
             # match/build targets
-            matches,target_objectness,target_offsets = self.build_targets(self.detection_layer.batch_anchors,
-                targets, fg_iou_threshold, bg_iou_threshold)
+            matches,target_objectness,target_labels,target_offsets = build_targets(
+                self.detection_layer.batch_anchors,
+                targets, fg_iou_threshold, bg_iou_threshold,
+                add_best_matches=True)
 
             # sample fg and bg with given ratio
-            positives,negatives = self.sample_fg_bg(matches,batch_size_per_image,batch_positive_ratio)
+            positives,negatives = sample_fg_bg(matches,batch_size_per_image,batch_positive_ratio)
             samples = torch.cat([positives,negatives])
 
             # compute loss
@@ -297,9 +213,7 @@ class RPNHead(nn.Module):
                 cls_logits[samples], target_objectness[samples],
                 reg_deltas[positives], target_offsets[positives])
 
-            losses = {
-                'rpn_cls_loss': cls_loss,
-                'rpn_reg_loss': reg_loss}
+            losses = {'cls_loss': cls_loss,'reg_loss': reg_loss}
 
             return batched_dets,losses
 
@@ -354,7 +268,7 @@ class RPN(nn.Module):
     def training_step(self, images:List[torch.Tensor], targets:List[Dict[str,torch.Tensor]]):
         batched_rois,losses = self.forward(images, targets=targets)
 
-        joint_loss = losses['rpn_cls_loss'] + losses['rpn_reg_loss']
+        joint_loss = losses['cls_loss'] + losses['reg_loss']
 
         for k in losses:
             losses[k] = losses[k].detach().item()
@@ -368,7 +282,7 @@ class RPN(nn.Module):
         batched_rois,losses = self.forward(images, targets=targets)
 
         roi_targets = [target['boxes'].cpu() for target in targets] # K,4
-        losses['loss'] = losses['rpn_cls_loss'] + losses['rpn_reg_loss']
+        losses['loss'] = losses['cls_loss'] + losses['reg_loss']
 
         for k in losses:
             losses[k] = losses[k].detach().item()
@@ -379,16 +293,3 @@ class RPN(nn.Module):
         }
         
         return detections,losses
-
-
-def draw_it(anchors,gt_boxes):
-    a = anchors.cpu().long().numpy()
-    t = gt_boxes.cpu().long().numpy()
-    bg = (np.ones((1000,1000,3)) * 255).astype(np.uint8)
-    for x1,y1,x2,y2 in t:
-        bg = cv2.rectangle(bg, (x1,y1),(x2,y2),(0,255,0),2)
-
-    for x1,y1,x2,y2 in a:
-        b = cv2.rectangle(bg.copy(), (x1,y1),(x2,y2),(0,0,255),1)
-        cv2.imshow("",b)
-        cv2.waitKey(0)

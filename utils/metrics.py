@@ -1,6 +1,6 @@
 from typing import List,Tuple
 import torch
-from .box import jaccard_vectorized
+from torchvision.ops import boxes as box_ops
 from tqdm import tqdm
 
 def calculate_mAP(predictions:List, ground_truths:List,
@@ -109,7 +109,7 @@ def generate_prediction_table(predictions:List, ground_truths:List) -> Tuple[tor
             M += mi
             continue
         M += mi
-        ious = jaccard_vectorized(pred[:,:4],gt) # ni,mi vector
+        ious = box_ops.box_iou(pred[:,:4],gt) # ni,mi vector
         iou_values,iou_indexes = ious.max(dim=1)
         ious = torch.stack([iou_values,iou_indexes.float(), pred[:, 4]]).t() # ni,3
         sort_pick = ious[:,0].argsort(dim=0,descending=True) # ni,3
@@ -162,7 +162,7 @@ def roi_recalls(predictions:List[torch.Tensor],
 
     for preds,gts in zip(predictions,ground_truths):
         total_targets = gts.size(0)
-        ious = jaccard_vectorized(preds[:,:4],gts) # N,4 | M,4 => N,M
+        ious = box_ops.box_iou(preds[:,:4],gts) # N,4 | M,4 => N,M
         hits = torch.zeros((th_size,total_targets), dtype=torch.bool, device=gts.device)
         for i in range(th_size):
             for j in range(total_targets):
