@@ -118,7 +118,7 @@ class FastRCNNHead(nn.Module):
             boxes = offsets2boxes(offsets, rois)
 
             # extract bg predictions
-            offsets = offsets[fg_preds_mask]
+            boxes = boxes[fg_preds_mask]
             preds = preds[fg_preds_mask]
             scores = scores[fg_preds_mask]
 

@@ -69,7 +69,7 @@ def main():
 
     for epoch in range(epochs):
         # start validation
-        #validation_loop(model, dl_val, batch_size, epoch)
+        validation_loop(model, dl_val, batch_size, epoch)
 
         # start training
         train_loop(model, dl_train, batch_size, epoch, epochs, optimizer, verbose, max_iter_count)
