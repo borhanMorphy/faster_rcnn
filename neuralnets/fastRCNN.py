@@ -99,8 +99,8 @@ class FastRCNNHead(nn.Module):
         for rois in batched_rois:
             N = rois.size(0)
 
-            logits = cls_logits[current:N]
-            offsets = reg_deltas[current:N]
+            logits = cls_logits[current:current+N]
+            offsets = reg_deltas[current:current+N]
             current += N
 
             # logits: torch.Tensor(N,)
@@ -109,12 +109,19 @@ class FastRCNNHead(nn.Module):
             
             scores,preds = F.softmax(logits, dim=1).max(dim=1)
 
+            fg_preds_mask = preds != 0
+
             # N,nC,4 => N,4
             offsets = offsets.gather(1, preds.view(-1,1).repeat(1,4).unsqueeze(1)).squeeze(1)
 
             # convert offsets to boxes
             # N,4 | N,4 => N,4 as xmin,ymin,xmax,ymax
             boxes = offsets2boxes(offsets, rois)
+
+            # extract bg predictions
+            offsets = offsets[fg_preds_mask]
+            preds = preds[fg_preds_mask]
+            scores = scores[fg_preds_mask]
 
             # apply conf threshold
             keep = scores >= conf_threshold
