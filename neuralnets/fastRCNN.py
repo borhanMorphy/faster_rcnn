@@ -68,7 +68,6 @@ class FastRCNNHead(nn.Module):
         batched_dets = self.post_process(cls_logits,reg_deltas,rois)
 
         if targets is not None:
-
             # sample fg and bg with given ratio
             positives,negatives = sample_fg_bg(matches,
                 self._params['num_of_samples'], self._params['positive_ratio'])
@@ -148,9 +147,8 @@ class FastRCNNHead(nn.Module):
         return batched_dets
 
     def compute_loss(self,
-        cls_logits:torch.Tensor, gt_labels:torch.Tensor,
-        deltas:torch.Tensor, gt_deltas:torch.Tensor):
-
+            cls_logits:torch.Tensor, gt_labels:torch.Tensor,
+            deltas:torch.Tensor, gt_deltas:torch.Tensor):
         num_samples = cls_logits.size(0)
 
         cls_loss = F.cross_entropy(cls_logits, gt_labels)

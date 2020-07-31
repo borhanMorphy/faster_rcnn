@@ -40,7 +40,7 @@ def main():
     learning_rate = 1e-3
     momentum = 0.9
     weight_decay = 5e-4
-    total_iter_size = 60000
+    total_iter_size = 60000 / batch_size
     num_classes = 21
 
     ds_train = ds_factory("VOC_train", transforms=train_transforms, download=not os.path.isfile('./data/VOCtrainval_11-May-2012.tar'))
@@ -69,7 +69,7 @@ def main():
 
     for epoch in range(epochs):
         # start validation
-        validation_loop(model, dl_val, batch_size, epoch)
+        #validation_loop(model, dl_val, batch_size, epoch)
 
         # start training
         train_loop(model, dl_train, batch_size, epoch, epochs, optimizer, verbose, max_iter_count)

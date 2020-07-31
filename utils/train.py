@@ -67,6 +67,7 @@ def build_targets(batched_anchors:List[torch.Tensor],
         pos_mask = matches == 1
         # set fg label for objectness
         target_objectness[ pos_mask ] = 1
+        target_labels[~pos_mask] = 0
 
         # convert boxes to offsets
         target_offsets[pos_mask] = boxes2offsets(target_offsets[pos_mask], anchors[pos_mask])
