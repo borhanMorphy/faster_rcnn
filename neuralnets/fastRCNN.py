@@ -1,9 +1,10 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torchvision.ops import RoIPool
+from torchvision.ops import RoIPool,MultiScaleRoIAlign
 from typing import List,Dict,Tuple
 from torchvision.ops import boxes as box_ops
+from collections import OrderedDict
 from utils import (
     build_targets,
     sample_fg_bg,
@@ -19,7 +20,10 @@ class FastRCNNHead(nn.Module):
         super(FastRCNNHead,self).__init__()
 
         self.num_classes = num_classes # including background as 0
-        self.roi_pool = RoIPool(roi_output_size, 1.0)
+        self.roi_pool = MultiScaleRoIAlign(
+                featmap_names=['0', '1', '2', '3'],
+                output_size=roi_output_size,
+                sampling_ratio=2)
         self.hidden_unit = nn.Sequential(
             nn.Linear(
                 in_features=roi_output_size*roi_output_size*features,
@@ -42,7 +46,7 @@ class FastRCNNHead(nn.Module):
             'nms_threshold': nms_threshold,
             'keep_top_n': keep_top_n}
 
-    def forward(self, fmaps:List[torch.Tensor], rois:List[torch.Tensor],
+    def forward(self, fmaps:List[torch.Tensor], rois:List[torch.Tensor], img_dims:List[Tuple[int,int]],
             targets:List[Dict[str,torch.Tensor]]=None):
 
         # assign rois to gt and generate cls(Ntotal,) and reg(Ntotal,4) targets
@@ -76,10 +80,12 @@ class FastRCNNHead(nn.Module):
 
         # extract all rois from feature maps (Ntotal,(C*output_size[0]*output_size[1]))
         # outputs: (Ntotal,output_features*output_size**2)
+        fmaps = OrderedDict([(str(i),fmap) for i,fmap in enumerate(fmaps)])
+        outputs = self.roi_pool(fmaps, rois, img_dims).flatten(start_dim=1)
 
-        outputs = torch.cat([
-            self.roi_pool(fmap, [boxes]).flatten(start_dim=1)
-            for fmap,boxes in zip(fmaps,rois)], dim=0)
+        #outputs = torch.cat([
+        #    self.roi_pool(fmap, [boxes]).flatten(start_dim=1)
+        #    for fmap,boxes in zip(fmaps,rois)], dim=0)
 
         # feed to the hidden units and get cls_logits and reg_deltas
 
@@ -117,7 +123,6 @@ class FastRCNNHead(nn.Module):
         current = 0
         for rois in batched_rois:
             N = rois.size(0)
-
             logits = cls_logits[current:current+N]
             offsets = reg_deltas[current:current+N]
             current += N

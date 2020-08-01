@@ -30,7 +30,7 @@ def load_latest_checkpoint(model):
         return
 
 def main():
-    small_dim_size = 600
+    small_dim_size = 800
     train_transforms = TrainTransforms(small_dim_size=small_dim_size)
     val_transforms = TestTransforms(small_dim_size=small_dim_size)
     batch_size = 1

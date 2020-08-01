@@ -23,7 +23,7 @@ class FasterRCNN(nn.Module):
         if targets is not None:
             batched_rois,rpn_losses = batched_rois
 
-        batched_dets = self.head(fmaps,[rois[:,:4] for rois in batched_rois],targets=targets)
+        batched_dets = self.head(fmaps,[rois[:,:4] for rois in batched_rois], img_dims, targets=targets)
 
         if targets is not None:
             batched_dets,head_losses = batched_dets
