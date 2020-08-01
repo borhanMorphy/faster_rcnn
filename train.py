@@ -21,6 +21,24 @@ from utils import (
     reduce_dataset
 )
 import os
+import argparse
+import json
+
+def parse_arguments():
+    ap = argparse.ArgumentParser()
+    
+    # TODO support multi batch
+    ap.add_argument('--smallest-img-size', '-sis', type=int, default=800)
+    ap.add_argument('--batch-size', '-bs', type=int, default=1, choices=[1])
+    ap.add_argument('--learning-rate', '-lr', type=float, default=1e-3)
+    ap.add_argument('--momentum', '-m', type=float, default=.9)
+    ap.add_argument('--epochs', '-e', type=int, default=10)
+    ap.add_argument('--weight-decay', '-wd', type=float, default=5e-4)
+
+    ap.add_argument('--val-ratio', '-vr', type=float, default=1e-1)
+    ap.add_argument('--verbose', '-vb', type=int, default=50) # every 50 forward show logs
+
+    return ap.parse_args()
 
 def load_latest_checkpoint(model):
     checkpoints = [f_name for f_name in os.listdir() if f_name.endswith('.pth')]
@@ -29,25 +47,24 @@ def load_latest_checkpoint(model):
         model.load_state_dict( torch.load(checkpoint, map_location='cpu') )
         return
 
-def main():
-    small_dim_size = 800
+def main(args):
+    print(json.dumps(vars(args),sort_keys=False,indent=4))
+    small_dim_size = args.smallest_img_size
     train_transforms = TrainTransforms(small_dim_size=small_dim_size)
     val_transforms = TestTransforms(small_dim_size=small_dim_size)
-    batch_size = 1
-    epochs = 1
+    batch_size = args.batch_size
+    epochs = args.epochs
 
-    # !defined in the paper
-    learning_rate = 1e-3
-    momentum = 0.9
-    weight_decay = 5e-4
-    total_iter_size = 60000 / batch_size
+    learning_rate = args.learning_rate
+    momentum = args.momentum
+    weight_decay = args.weight_decay
     num_classes = 21
 
     ds_train = ds_factory("VOC_train", transforms=train_transforms, download=not os.path.isfile('./data/VOCtrainval_11-May-2012.tar'))
     dl_train = generate_dl(ds_train, batch_size=batch_size)
 
     ds_val = ds_factory("VOC_val", transforms=val_transforms, download=not os.path.isfile('./data/VOCtrainval_11-May-2012.tar'))
-    ds_val = reduce_dataset(ds_val, ratio=0.1)
+    ds_val = reduce_dataset(ds_val, ratio=args.val_ratio)
     dl_val = generate_dl(ds_val, batch_size=batch_size)
 
     backbone = models.mobilenet_v2(pretrained=True).features
@@ -59,13 +76,11 @@ def main():
 
     model.to('cuda')
 
-    verbose = int(50/batch_size)
+    verbose = int(args.verbose/batch_size)
     optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate,
         momentum=momentum, weight_decay=weight_decay)
 
     max_iter_count = int(len(ds_train)/batch_size)
-    # ! set because of the paper
-    epochs = int(total_iter_size / max_iter_count)
 
     for epoch in range(epochs):
         # start validation
@@ -103,7 +118,7 @@ def train_loop(model, dl, batch_size:int, epoch, epochs, optimizer, verbose, max
             log += f"\titer[{iter_count}/{max_iter_count}]"
             print(log)
 
-def validation_loop(model, dl, batch_size:int, epoch):
+def validation_loop(model, dl, batch_size:int, epoch:int):
     # start validation
     total_val_iter = int(len(dl.dataset) / batch_size)
     model.eval()
@@ -135,7 +150,8 @@ def validation_loop(model, dl, batch_size:int, epoch):
         head_predictions += dets['head']['predictions']
         head_ground_truths += dets['head']['ground_truths']
 
-    AP = calculate_AP(head_predictions, head_ground_truths, iou_threshold=0.5)
+    mAP = calculate_mAP(head_predictions, head_ground_truths, model.head.num_classes, iou_threshold=0.5)
+    AP = calculate_AP([pred[:,:5] for pred in head_predictions], [gt[:,:4] for gt in head_ground_truths], iou_threshold=0.5)
 
     means = caclulate_means(all_losses)
 
@@ -143,15 +159,13 @@ def validation_loop(model, dl, batch_size:int, epoch):
     print(f"RPN mean recall at iou thresholds are:")
     for iou_threshold,rpn_recall in zip(iou_thresholds.cpu().numpy(),rpn_recalls.cpu().numpy()*100):
         print(f"IoU={iou_threshold:.02f} recall={int(rpn_recall)}")
-    print(f"HEAD AP score={AP.item()*100:.02f} at IoU=0.5")
+    print(f"HEAD AP objectness score={AP.item()*100:.02f} at IoU=0.5")
+    print(f"HEAD mAP score={mAP.item()*100:.02f} at IoU=0.5")
     for k,v in means.items():
         print(f"{k}: {v:.4f}")
     print("--------------------------------------------")
 
-def tensor2img(batch):
-    imgs = (batch.permute(0,2,3,1).cpu() * 255).numpy().astype(np.uint8)
-    return [cv2.cvtColor(img,cv2.COLOR_RGB2BGR) for img in imgs]
-
 if __name__ == "__main__":
     torch.autograd.set_detect_anomaly(True)
-    main()
+    args = parse_arguments()
+    main(args)

@@ -167,6 +167,7 @@ class FastRCNNHead(nn.Module):
             preds = preds.unsqueeze(1).to(boxes.dtype)
 
             dets = torch.cat([boxes,scores,preds], dim=-1)
+
             batched_dets.append(dets)
 
         return batched_dets

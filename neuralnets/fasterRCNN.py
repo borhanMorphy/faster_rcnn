@@ -52,7 +52,14 @@ class FasterRCNN(nn.Module):
     def validation_step(self, batch:List[torch.Tensor], targets:List[Dict[str,torch.Tensor]]):
         batched_rois,batched_dets,losses = self.forward(batch, targets=targets)
 
-        det_targets = [target['boxes'].cpu() for target in targets] # K,4
+        det_targets = []
+        for target in targets:
+            gt_boxes = target['boxes']
+            labels = target['labels'].to(gt_boxes.device, gt_boxes.dtype).unsqueeze(-1)
+            det_targets.append(torch.cat([gt_boxes,labels], dim=-1).cpu())
+
+        roi_targets = [det_target[:,:4] for det_target in det_targets] # K,5 => K,4
+        
         losses['loss'] = losses['rpn_cls_loss'] + losses['rpn_reg_loss'] +\
             losses['head_cls_loss'] + losses['head_reg_loss']
 
@@ -62,10 +69,10 @@ class FasterRCNN(nn.Module):
         detections = {
             'rpn':{
                 'predictions': [rois.cpu() for rois in batched_rois],
-                'ground_truths': det_targets.copy()
+                'ground_truths': roi_targets.copy()
             },
             'head':{
-                'predictions': [dets[:,:5].cpu() for dets in batched_dets],
+                'predictions': [dets.cpu() for dets in batched_dets],
                 'ground_truths': det_targets.copy()
             }
         }
