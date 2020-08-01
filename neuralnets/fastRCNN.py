@@ -53,13 +53,36 @@ class FastRCNNHead(nn.Module):
                 self._params['fg_iou_threshold'],self._params['bg_iou_threshold'],
                 add_best_matches=False)
 
+            # sample fg and bg with given ratio
+            positives,negatives = sample_fg_bg(matches,
+                self._params['num_of_samples'], self._params['positive_ratio'])
+
+            matches[:] = 0 
+            matches[positives] = 1
+            matches[negatives] = -1
+            sample_mask = torch.logical_or(matches == 1,matches == -1)
+            positive_mask = matches == 1
+
+            target_objectness = target_objectness[sample_mask]
+            target_labels = target_labels[sample_mask]
+            target_offsets = target_offsets[positive_mask]
+            current = 0
+            for roi_index,boxes in enumerate(rois):
+                N = boxes.size(0)
+                batch_sample_mask = sample_mask[current: current+N]
+                current += N
+                rois[roi_index] = boxes[batch_sample_mask]
+            
+
         # extract all rois from feature maps (Ntotal,(C*output_size[0]*output_size[1]))
         # outputs: (Ntotal,output_features*output_size**2)
+
         outputs = torch.cat([
             self.roi_pool(fmap, [boxes]).flatten(start_dim=1)
             for fmap,boxes in zip(fmaps,rois)], dim=0)
 
         # feed to the hidden units and get cls_logits and reg_deltas
+
         outputs = self.hidden_unit(outputs) # Ntotal,hiddin_channels
         cls_logits = self.cls_unit(outputs) # Ntotal,num_classes
         reg_deltas = self.reg_unit(outputs)  # Ntotal,num_classes*4
@@ -68,16 +91,13 @@ class FastRCNNHead(nn.Module):
         batched_dets = self.post_process(cls_logits,reg_deltas,rois)
 
         if targets is not None:
-            # sample fg and bg with given ratio
-            positives,negatives = sample_fg_bg(matches,
-                self._params['num_of_samples'], self._params['positive_ratio'])
-
-            samples = torch.cat([positives,negatives])
+            pos_mask = target_labels != 0
+            reg_deltas = reg_deltas[pos_mask, target_labels[pos_mask]]
 
             # compute loss
             cls_loss,reg_loss = self.compute_loss(
-                cls_logits[samples], target_labels[samples],
-                reg_deltas[positives, target_labels[positives]], target_offsets[positives])
+                cls_logits, target_labels,
+                reg_deltas, target_offsets)
 
             losses = {'cls_loss': cls_loss,'reg_loss': reg_loss}
 
@@ -149,6 +169,7 @@ class FastRCNNHead(nn.Module):
     def compute_loss(self,
             cls_logits:torch.Tensor, gt_labels:torch.Tensor,
             deltas:torch.Tensor, gt_deltas:torch.Tensor):
+
         num_samples = cls_logits.size(0)
 
         cls_loss = F.cross_entropy(cls_logits, gt_labels)

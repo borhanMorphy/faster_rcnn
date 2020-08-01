@@ -59,7 +59,7 @@ def main():
 
     model.to('cuda')
 
-    verbose = 50
+    verbose = int(50/batch_size)
     optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate,
         momentum=momentum, weight_decay=weight_decay)
 
@@ -136,6 +136,7 @@ def validation_loop(model, dl, batch_size:int, epoch):
         head_ground_truths += dets['head']['ground_truths']
 
     AP = calculate_AP(head_predictions, head_ground_truths, iou_threshold=0.5)
+
     means = caclulate_means(all_losses)
 
     print(f"--validation results for epoch {epoch+1} --")
