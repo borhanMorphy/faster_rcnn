@@ -184,21 +184,23 @@ def validation_loop(model, dl, batch_size:int, epoch:int):
     for dets in all_detections:
         head_predictions += dets['head']['predictions']
         head_ground_truths += dets['head']['ground_truths']
+    head_predictions = [pred[:,:5] for pred in head_predictions]
+    head_ground_truths = [pred[:,:4] for pred in head_ground_truths]
 
-    mAP50 = calculate_mAP(head_predictions, head_ground_truths, model.head.num_classes, iou_threshold=0.5)
-    mAP75 = calculate_mAP(head_predictions, head_ground_truths, model.head.num_classes, iou_threshold=0.75)
-    mAP90 = calculate_mAP(head_predictions, head_ground_truths, model.head.num_classes, iou_threshold=0.90)
-    mAP = (mAP50 + mAP75 + mAP90) / 3
+    AP50 = calculate_AP(head_predictions, head_ground_truths, iou_threshold=0.5)
+    AP75 = calculate_AP(head_predictions, head_ground_truths, iou_threshold=0.75)
+    AP90 = calculate_AP(head_predictions, head_ground_truths, iou_threshold=0.90)
+    AP = (AP50 + AP75 + AP90) / 3
     means = caclulate_means(all_losses)
 
     print(f"--validation results for epoch {epoch+1} --")
     print(f"RPN mean recall at iou thresholds are:")
     for iou_threshold,rpn_recall in zip(iou_thresholds.cpu().numpy(),rpn_recalls.cpu().numpy()*100):
         print(f"IoU={iou_threshold:.02f} recall={int(rpn_recall)}")
-    print(f"HEAD mAP IoU=.5 :{mAP50.item()*100:.02f}")
-    print(f"HEAD mAP IoU=.75 :{mAP75.item()*100:.02f}")
-    print(f"HEAD mAP IoU=.90 :{mAP90.item()*100:.02f}")
-    print(f"HEAD mAP IoU=.5:.95 :{mAP.item()*100:.02f}")
+    print(f"HEAD AP IoU=.5 :{AP50.item()*100:.02f}")
+    print(f"HEAD AP IoU=.75 :{AP75.item()*100:.02f}")
+    print(f"HEAD AP IoU=.90 :{AP90.item()*100:.02f}")
+    print(f"HEAD AP IoU=.5:.95 :{AP.item()*100:.02f}")
 
     for k,v in means.items():
         print(f"{k}: {v:.4f}")

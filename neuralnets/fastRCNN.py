@@ -213,7 +213,7 @@ class FastRCNNSingleHead(FastRCNNHead):
 
         if targets is not None:
             pos_mask = target_objectness != 0
-            reg_deltas = reg_deltas[pos_mask].reshape(-1,4)
+            reg_deltas = reg_deltas[pos_mask]
 
             # compute loss
             cls_loss,reg_loss = self.compute_loss(
@@ -255,9 +255,6 @@ class FastRCNNSingleHead(FastRCNNHead):
             preds[scores >= 0.5] = 1
 
             fg_preds_mask = preds != 0
-
-            # N,1,4 => N,4
-            offsets = offsets.reshape(-1,4)
 
             # convert offsets to boxes
             # N,4 | N,4 => N,4 as xmin,ymin,xmax,ymax
