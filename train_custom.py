@@ -107,7 +107,7 @@ def main(args):
 
     model = FasterRCNN(backbone,num_classes)
 
-    #load_latest_checkpoint(model)
+    load_latest_checkpoint(model)
 
     model.to('cuda')
 
