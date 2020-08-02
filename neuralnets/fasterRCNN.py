@@ -17,7 +17,7 @@ class FasterRCNN(nn.Module):
         self.backbone = backbone
         self.rpn = RPNHead(backbone.output_channels)
 
-        if num_classes > 2:
+        if num_classes > 1:
             self.head = FastRCNNMultiHead(backbone.output_channels, num_classes,
                 roi_output_size=output_size, hidden_channels=hidden_channels,
                 batch_size_per_image=batch_size_per_image, batch_positive_ratio=batch_positive_ratio,
@@ -68,15 +68,15 @@ class FasterRCNN(nn.Module):
         losses['loss'] = joint_loss
         return losses
 
-    @torch.no_grad()
     def validation_step(self, batch:torch.Tensor, targets:List[Dict[str,torch.Tensor]]):
-        batched_rois,batched_dets,losses = self.forward(batch, targets=targets)
+        with torch.no_grad():
+            batched_rois,batched_dets,losses = self.forward(batch, targets=targets)
 
         det_targets = []
         for target in targets:
-            gt_boxes = target['boxes']
+            gt_boxes = target['boxes'].cpu()
             labels = target['labels'].to(gt_boxes.device, gt_boxes.dtype).unsqueeze(-1)
-            det_targets.append(torch.cat([gt_boxes,labels], dim=-1).cpu())
+            det_targets.append(torch.cat([gt_boxes,labels], dim=-1))
 
         roi_targets = [det_target[:,:4] for det_target in det_targets] # K,5 => K,4
         

@@ -71,7 +71,6 @@ class DetectionLayer(nn.Module):
         self.anchor_generator = anchor_generator
         self.cached_fmap_dims = (-1,-1)
 
-    @torch.no_grad()
     def forward(self, cls_logits:torch.Tensor, reg_deltas:torch.Tensor,
             fmap_dims:Tuple[int,int], img_dims:Tuple[int,int],
             nms_threshold:float=.7, keep_pre_nms:int=1000, keep_post_nms:int=300,
@@ -272,9 +271,9 @@ class RPN(nn.Module):
 
         return losses
 
-    @torch.no_grad()
     def validation_step(self, batch:torch.Tensor, targets:List[Dict[str,torch.Tensor]]):
-        batched_rois,losses = self.forward(batch, targets=targets)
+        with torch.no_grad():
+            batched_rois,losses = self.forward(batch, targets=targets)
 
         roi_targets = [target['boxes'].cpu() for target in targets] # K,4
         losses['loss'] = losses['cls_loss'] + losses['reg_loss']

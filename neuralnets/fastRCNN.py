@@ -120,7 +120,6 @@ class FastRCNNMultiHead(FastRCNNHead):
 
         return batched_dets
 
-    @torch.no_grad()
     def post_process(self, cls_logits:torch.Tensor,
             reg_deltas:torch.Tensor, batched_rois:List[torch.Tensor]):
         nms_threshold = self._params['nms_threshold']
@@ -226,7 +225,6 @@ class FastRCNNSingleHead(FastRCNNHead):
 
         return batched_dets
 
-    @torch.no_grad()
     def post_process(self, cls_logits:torch.Tensor,
             reg_deltas:torch.Tensor, batched_rois:List[torch.Tensor]):
         nms_threshold = self._params['nms_threshold']
