@@ -46,29 +46,22 @@ class PredictionLayer(nn.Module):
         pred = pred.reshape(bs,-1,c)
         return pred
 
-    def forward(self, fmaps:List[torch.Tensor]) -> Tuple[List[torch.Tensor],List[torch.Tensor]]:
+    def forward(self, fmaps:torch.Tensor) -> Tuple[List[torch.Tensor],List[torch.Tensor]]:
         """
         Params:
-            fmaps List[torch.Tensor]: list of feature maps with shape 1 x c' x h' x w'
+            fmaps torch.Tensor: feature maps with shape bs x c' x h' x w'
 
         Returns:
-            Tuple[List[torch.Tensor],List[torch.Tensor]]
-                cls_logits: [(1 x (h'*w'*nA) x 1), ...]
-                reg_deltas: [(1 x (h'*w'*nA) x 4), ...] as dx,dy,dw,dh
+            Tuple[torch.Tensor,torch.Tensor]
+                cls_logits: bs x (h'*w'*nA) x 1
+                reg_deltas: bs x (h'*w'*nA) x 4 as dx,dy,dw,dh
         """
-        cls_logits:List[torch.Tensor] = []
-        reg_deltas:List[torch.Tensor] = []
-        for i in range(len(fmaps)):
-            assert fmaps[i].size(0) == 1,"only 1 batch size allowed for now"
-            output = F.relu(self.base_conv_layer(fmaps[i]))
-            logits = self.cls_conv_layer(output)
-            logits = self.flatten_preds(logits, 1)
+        outputs = F.relu(self.base_conv_layer(fmaps))
+        cls_logits = self.cls_conv_layer(outputs)
+        cls_logits = self.flatten_preds(cls_logits, 1)
 
-            deltas = self.reg_conv_layer(output)
-            deltas = self.flatten_preds(deltas, 4)
-
-            cls_logits.append( logits )
-            reg_deltas.append( deltas )
+        reg_deltas = self.reg_conv_layer(outputs)
+        reg_deltas = self.flatten_preds(reg_deltas, 4)
 
         return cls_logits,reg_deltas
 
@@ -76,64 +69,64 @@ class DetectionLayer(nn.Module):
     def __init__(self, anchor_generator):
         super(DetectionLayer,self).__init__()
         self.anchor_generator = anchor_generator
+        self.cached_fmap_dims = (-1,-1)
 
     @torch.no_grad()
-    def forward(self, cls_logits:List[torch.Tensor], reg_deltas:List[torch.Tensor],
-            fmap_dims:List[Tuple[int,int]], img_dims:List[Tuple[int,int]],
+    def forward(self, cls_logits:torch.Tensor, reg_deltas:torch.Tensor,
+            fmap_dims:Tuple[int,int], img_dims:Tuple[int,int],
             nms_threshold:float=.7, keep_pre_nms:int=1000, keep_post_nms:int=300,
             dtype=torch.float32, device='cpu'):
         """
         Params:
-            cls_logits List[torch.Tensor]: [torch.Tensor(1 x (h'*w'*nA) x 1), ...] 
-            reg_deltas List[torch.Tensor]: [torch.Tensor(1 x (h'*w'*nA) x 4), ...]
-            fmap_dims:List[Tuple[int,int]] [(h',w'), ...]
-            img_dims:List[Tuple[int,int]] [(h,w), ...]
+            cls_logits torch.Tensor: torch.Tensor(bs x (h'*w'*nA) x 1) 
+            reg_deltas torch.Tensor: torch.Tensor(bs x (h'*w'*nA) x 4)
+            fmap_dims:Tuple[int,int] h',w'
+            img_dims:Tuple[int,int] h,w
 
         Returns:
             batched_dets: List[torch.Tensor(N,5)] as xmin,ymin,xmax,ymax,score
         """
-        # generate anchors for each input
-        self.batch_anchors = self.anchor_generator(fmap_dims, img_dims, dtype=dtype, device=device)
+        bs = cls_logits.size(0)
+        if self.cached_fmap_dims != fmap_dims:
+            # generate anchors for each input
+            self.anchors = self.anchor_generator(fmap_dims, img_dims, dtype=dtype, device=device)
+            self.cached_fmap_dims = fmap_dims
 
-        batch_iter = zip(cls_logits,reg_deltas,self.batch_anchors,img_dims)
         batched_dets:List[torch.Tensor] = []
 
-        for cls_logit,reg_delta,anchors,img_dim in batch_iter:
-            # N = h'*w'*nA
-            # cls_logit: torch.Tensor(N,)
-            # reg_delta: torch.Tensor(N,4)
-            # anchors: torch.Tensor(N,4)
-            # img_dim: (h,w)
+        scores = torch.sigmoid(cls_logits.detach()).reshape(bs,-1)
+        offsets = reg_deltas.detach().reshape(bs,-1,4)
+
+        # convert offsets to boxes
+        # bs,N,4 | N,4 => bs,N,4 as xmin,ymin,xmax,ymax
+        boxes = offsets2boxes(offsets, self.anchors)
+
+        # TODO vectorize this loop
+        for i in range(bs):
+            single_boxes = boxes[i]
+            single_scores = scores[i]
+            N = single_scores.size(0)
             
-            # torch.Tensor(N,) => torch.Tensor(N,)
-            scores = torch.sigmoid(cls_logit.detach()).reshape(-1) # ! assumed bs=1
-            offsets = reg_delta.detach().reshape(-1,4) # ! assumed bs=1
-
-            # convert offsets to boxes
-            # N,4 | N,4 => N,4 as xmin,ymin,xmax,ymax
-            boxes = offsets2boxes(offsets, anchors)
-
             # select top n
-            _,selected_ids = scores.topk(keep_pre_nms)
-            scores,boxes = scores[selected_ids], boxes[selected_ids]
+            _,selected_ids = single_scores.topk( min(keep_pre_nms,N) )
+            single_scores,single_boxes = single_scores[selected_ids], single_boxes[selected_ids]
 
             # clip boxes
-            boxes = box_ops.clip_boxes_to_image(boxes, img_dim)
+            single_boxes = box_ops.clip_boxes_to_image(single_boxes, img_dims)
 
             # remove small
-            keep = box_ops.remove_small_boxes(boxes, 1e-3) # TODO try 1
-            scores,boxes = scores[keep], boxes[keep]
+            keep = box_ops.remove_small_boxes(boxes[i], 1e-3) # TODO try 1
+            single_scores,single_boxes = single_scores[keep], single_boxes[keep]
 
             # nms
-            keep = box_ops.nms(boxes, scores, nms_threshold)
-            scores,boxes = scores[keep], boxes[keep]
+            keep = box_ops.nms(single_boxes, single_scores, nms_threshold)
+            single_scores,single_boxes = single_scores[keep], single_boxes[keep]
 
             # post_n
-            keep_post_nms = min(keep_post_nms, boxes.size(0))
-            scores,boxes = scores[:keep_post_nms], boxes[:keep_post_nms]
+            keep_post_nms = min(keep_post_nms, single_boxes.size(0))
+            single_scores,single_boxes = single_scores[:keep_post_nms], single_boxes[:keep_post_nms]
 
-            # ! warning 0 size might be cause error
-            batched_dets.append( torch.cat([boxes,scores.unsqueeze(-1)], dim=-1) )
+            batched_dets.append( torch.cat([single_boxes,single_scores.unsqueeze(-1)], dim=-1) )
 
         return batched_dets
 
@@ -173,20 +166,21 @@ class RPNHead(nn.Module):
             return self._params['train'],self._params['others']
         return self._params['test'],self._params['others']
 
-    def forward(self, fmaps:List[torch.Tensor], img_dims:List[Tuple[int,int]],
+    def forward(self, fmaps:torch.Tensor, img_dims:Tuple[int,int],
             targets:List[Dict[str,torch.Tensor]]=None):
         (keep_pre_nms, keep_post_nms),\
             (batch_size_per_image, batch_positive_ratio,\
                 fg_iou_threshold, bg_iou_threshold,\
                     nms_threshold) = self.get_params()
 
-        dtype = fmaps[0].dtype
-        device = fmaps[0].device
+        dtype = fmaps.dtype
+        device = fmaps.device
+        bs = fmaps.size(0)
 
-        fmap_dims = [fmap.shape[-2:] for fmap in fmaps]
+        fmap_dims = fmaps.shape[-2:]
 
-        # cls_logits: [(1 x (h'*w'*nA) x 1), ...]
-        # reg_deltas: [(1 x (h'*w'*nA) x 4), ...] as dx,dy,dw,dh
+        # cls_logits: (bs x (h'*w'*nA) x 1)
+        # reg_deltas: (bs x (h'*w'*nA) x 4) as dx,dy,dw,dh
         cls_logits,reg_deltas = self.prediction_layer(fmaps)
 
         batched_dets = self.detection_layer(cls_logits, reg_deltas, fmap_dims,
@@ -195,12 +189,13 @@ class RPNHead(nn.Module):
             dtype=dtype, device=device)
 
         if targets is not None:
-            cls_logits = torch.cat(cls_logits, dim=1).reshape(-1)
-            reg_deltas = torch.cat(reg_deltas, dim=1).reshape(-1,4)
+            # merge batches
+            cls_logits = cls_logits.reshape(-1)
+            reg_deltas = reg_deltas.reshape(-1,4)
                         
             # match/build targets
             matches,target_objectness,target_labels,target_offsets = build_targets(
-                self.detection_layer.batch_anchors,
+                self.detection_layer.anchors.repeat(bs,1,1),
                 targets, fg_iou_threshold, bg_iou_threshold,
                 add_best_matches=True)
 
@@ -255,18 +250,18 @@ class RPN(nn.Module):
             fg_iou_threshold=fg_iou_threshold, bg_iou_threshold=bg_iou_threshold,
             anchor_generator=anchor_generator)
 
-    def forward(self, images:List[torch.Tensor], targets:List[Dict[str,torch.Tensor]]=None):
+    def forward(self, batch:torch.Tensor, targets:List[Dict[str,torch.Tensor]]=None):
 
-        img_dims = [img.shape[-2:] for img in images]
+        img_dims = batch.shape[-2:]
 
-        fmaps = [self.backbone(img) for img in images]
+        fmaps = self.backbone(batch)
 
         batched_rois,losses = self.head(fmaps, img_dims, targets=targets)
 
         return batched_rois,losses
 
-    def training_step(self, images:List[torch.Tensor], targets:List[Dict[str,torch.Tensor]]):
-        batched_rois,losses = self.forward(images, targets=targets)
+    def training_step(self, batch:torch.Tensor, targets:List[Dict[str,torch.Tensor]]):
+        batched_rois,losses = self.forward(batch, targets=targets)
 
         joint_loss = losses['cls_loss'] + losses['reg_loss']
 
@@ -278,8 +273,8 @@ class RPN(nn.Module):
         return losses
 
     @torch.no_grad()
-    def validation_step(self, images:List[torch.Tensor], targets:List[Dict[str,torch.Tensor]]):
-        batched_rois,losses = self.forward(images, targets=targets)
+    def validation_step(self, batch:torch.Tensor, targets:List[Dict[str,torch.Tensor]]):
+        batched_rois,losses = self.forward(batch, targets=targets)
 
         roi_targets = [target['boxes'].cpu() for target in targets] # K,4
         losses['loss'] = losses['cls_loss'] + losses['reg_loss']

@@ -26,60 +26,61 @@ class AnchorGenerator(nn.Module):
 
         return (torch.stack([-ws, -hs, ws, hs], dim=1) / 2).round()
 
-    def forward(self, fmap_dims:List[Tuple[int,int]], img_dims:List[Tuple[int,int]],
-            dtype=torch.float32, device='cpu') -> List[torch.Tensor]:
+    def forward(self, fmap_dims:Tuple[int,int], img_dims:Tuple[int,int],
+            dtype=torch.float32, device='cpu') -> torch.Tensor:
         """
         Params:
-            fmap_dims List[Tuple[int,int]]: [(h',w'), ...]
-            img_dims List[Tuple[int,int]]: [(h,w), ...]
+            fmap_dims Tuple[int,int]: h',w'
+            img_dims Tuple[int,int]: h,w
         
         Returns:
-            anchors List[torch.Tensor((nA*h'*w'),4), ...] as xmin,ymin,xmax,ymax
+            anchors torch.Tensor((nA*h'*w'),4) as xmin,ymin,xmax,ymax
         """
-        anchors:List = []
-        for fmap_dim,img_dim in zip(fmap_dims,img_dims):
-            # fmap_dim: h',w'
-            # img_dim: h,w
-            fh,fw = fmap_dim
-            h,w = img_dim
+        # fmap_dims: h',w'
+        # img_dims: h,w
+        fh,fw = fmap_dims
+        h,w = img_dims
 
-            shift_x = torch.arange(0,fw, dtype=dtype, device=device) * int(w/fw)
-            shift_y = torch.arange(0,fh, dtype=dtype, device=device) * int(h/fh)
-            shift_y,shift_x = torch.meshgrid(shift_y,shift_x)
+        shift_x = torch.arange(0,fw, dtype=dtype, device=device) * int(w/fw)
+        shift_y = torch.arange(0,fh, dtype=dtype, device=device) * int(h/fh)
+        shift_y,shift_x = torch.meshgrid(shift_y,shift_x)
 
-            shift_x = shift_x.reshape(-1)
-            shift_y = shift_y.reshape(-1)
-            shifts = torch.stack((shift_x, shift_y, shift_x, shift_y), dim=1)
+        shift_x = shift_x.reshape(-1)
+        shift_y = shift_y.reshape(-1)
+        shifts = torch.stack((shift_x, shift_y, shift_x, shift_y), dim=1)
 
-            if self.base_anchors.dtype != dtype:
-                self.base_anchors = self.base_anchors.to(dtype=dtype)
-            if self.base_anchors.device != device:
-                self.base_anchors = self.base_anchors.to(device=device)
+        if self.base_anchors.dtype != dtype:
+            self.base_anchors = self.base_anchors.to(dtype=dtype)
+        if self.base_anchors.device != device:
+            self.base_anchors = self.base_anchors.to(device=device)
 
-            anchors.append( 
-                (shifts.view(-1, 1, 4) + self.base_anchors.view(1, -1, 4)).reshape(-1, 4) )
+        return (shifts.view(-1, 1, 4) + self.base_anchors.view(1, -1, 4)).reshape(-1, 4)
 
-        return anchors
-
-def offsets2boxes(deltas:torch.Tensor, anchors:torch.Tensor):
+def offsets2boxes(offsets:torch.Tensor, anchors:torch.Tensor):
     """
     Params:
-        deltas torch.Tensor(N,4): as dx,dy,dw,dh
+        offsets torch.Tensor(bs,N,4): as dx,dy,dw,dh
         anchors torch.Tensor(N,4): as xmin,ymin,xmax,ymax
 
     Returns:
         boxes torch.Tensor(N,4): as xmin,ymin,xmax,ymax
     """
-    anchors = anchors.to(deltas.device)
+    assert len(offsets.shape) == 3
+    bs = offsets.size(0)
+    deltas = offsets.clone()
+
+    deltas = deltas.reshape(-1,4)
+
+    c_anchors = anchors.to(deltas.device).repeat(bs,1,1).reshape(-1,4)
     dx = deltas[:, 0::4]
     dy = deltas[:, 1::4]
     dw = deltas[:, 2::4]
     dh = deltas[:, 3::4]
 
-    wa = anchors[:, 2::4] - anchors[:, 0::4]
-    ha = anchors[:, 3::4] - anchors[:, 1::4]
-    cxa = anchors[:, 0::4] + .5 * wa
-    cya = anchors[:, 1::4] + .5 * ha
+    wa = c_anchors[:, 2::4] - c_anchors[:, 0::4]
+    ha = c_anchors[:, 3::4] - c_anchors[:, 1::4]
+    cxa = c_anchors[:, 0::4] + .5 * wa
+    cya = c_anchors[:, 1::4] + .5 * ha
 
     cx = dx * wa + cxa
     cy = dy * ha + cya
@@ -91,7 +92,7 @@ def offsets2boxes(deltas:torch.Tensor, anchors:torch.Tensor):
     xmax = cx + .5 * w
     ymax = cy + .5 * h
 
-    return torch.cat([xmin,ymin,xmax,ymax], dim=-1)
+    return torch.cat([xmin,ymin,xmax,ymax], dim=-1).reshape(bs,-1,4)
 
 def boxes2offsets(boxes:torch.Tensor, anchors:torch.Tensor):
     """

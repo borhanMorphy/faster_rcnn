@@ -46,7 +46,7 @@ class FastRCNNHead(nn.Module):
             'nms_threshold': nms_threshold,
             'keep_top_n': keep_top_n}
 
-    def forward(self, fmaps:List[torch.Tensor], rois:List[torch.Tensor], img_dims:List[Tuple[int,int]],
+    def forward(self, fmaps:Dict[str,torch.Tensor], rois:List[torch.Tensor], img_dims:List[Tuple[int,int]],
             targets:List[Dict[str,torch.Tensor]]=None):
 
         # assign rois to gt and generate cls(Ntotal,) and reg(Ntotal,4) targets
@@ -80,12 +80,8 @@ class FastRCNNHead(nn.Module):
 
         # extract all rois from feature maps (Ntotal,(C*output_size[0]*output_size[1]))
         # outputs: (Ntotal,output_features*output_size**2)
-        fmaps = OrderedDict([(str(i),fmap) for i,fmap in enumerate(fmaps)])
+    
         outputs = self.roi_pool(fmaps, rois, img_dims).flatten(start_dim=1)
-
-        #outputs = torch.cat([
-        #    self.roi_pool(fmap, [boxes]).flatten(start_dim=1)
-        #    for fmap,boxes in zip(fmaps,rois)], dim=0)
 
         # feed to the hidden units and get cls_logits and reg_deltas
 
@@ -118,7 +114,6 @@ class FastRCNNHead(nn.Module):
         conf_threshold = self._params['conf_threshold']
         keep_top_n = self._params['keep_top_n']
 
-
         batched_dets:List[torch.Tensor] = []
         current = 0
         for rois in batched_rois:
@@ -140,7 +135,8 @@ class FastRCNNHead(nn.Module):
 
             # convert offsets to boxes
             # N,4 | N,4 => N,4 as xmin,ymin,xmax,ymax
-            boxes = offsets2boxes(offsets, rois)
+
+            boxes = offsets2boxes(offsets.unsqueeze(0), rois).squeeze(0)
 
             # extract bg predictions
             boxes = boxes[fg_preds_mask]
@@ -165,7 +161,6 @@ class FastRCNNHead(nn.Module):
             scores,preds,boxes = scores[selected_ids],preds[selected_ids],boxes[selected_ids]
             scores.unsqueeze_(1)
             preds = preds.unsqueeze(1).to(boxes.dtype)
-
             dets = torch.cat([boxes,scores,preds], dim=-1)
 
             batched_dets.append(dets)

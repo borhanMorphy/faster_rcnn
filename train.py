@@ -26,10 +26,8 @@ import json
 
 def parse_arguments():
     ap = argparse.ArgumentParser()
-    
-    # TODO support multi batch
-    ap.add_argument('--smallest-img-size', '-sis', type=int, default=800)
-    ap.add_argument('--batch-size', '-bs', type=int, default=1, choices=[1])
+
+    ap.add_argument('--batch-size', '-bs', type=int, default=1)
     ap.add_argument('--learning-rate', '-lr', type=float, default=1e-3)
     ap.add_argument('--momentum', '-m', type=float, default=.9)
     ap.add_argument('--epochs', '-e', type=int, default=10)
@@ -49,9 +47,8 @@ def load_latest_checkpoint(model):
 
 def main(args):
     print(json.dumps(vars(args),sort_keys=False,indent=4))
-    small_dim_size = args.smallest_img_size
-    train_transforms = TrainTransforms(small_dim_size=small_dim_size)
-    val_transforms = TestTransforms(small_dim_size=small_dim_size)
+    train_transforms = TrainTransforms()
+    val_transforms = TestTransforms()
     batch_size = args.batch_size
     epochs = args.epochs
 

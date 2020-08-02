@@ -8,6 +8,7 @@ def reduce_dataset(ds,ratio=0.1):
 
 def custom_collate_fn(batch):
     images,targets = zip(*batch)
+    images = torch.cat(images,dim=0)
     return images,targets
 
 def generate_dl(ds, batch_size:int=1, collate_fn=custom_collate_fn,

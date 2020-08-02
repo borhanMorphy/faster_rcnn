@@ -15,9 +15,9 @@ def tensor2img(batch):
     return [cv2.cvtColor(img,cv2.COLOR_RGB2BGR) for img in imgs]
 
 
-def move_to_gpu(batch:List[torch.Tensor], targets:List[Dict[str,torch.Tensor]]):
-    for i in range(len(batch)):
-        batch[i] = batch[i].cuda()
+def move_to_gpu(batch:torch.Tensor, targets:List[Dict[str,torch.Tensor]]):
+    for i in range(len(targets)):
         targets[i]['boxes'] = targets[i]['boxes'].cuda()
         targets[i]['labels'] = targets[i]['labels'].cuda()
+    batch = batch.cuda()
     return batch,targets

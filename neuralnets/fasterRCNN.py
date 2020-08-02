@@ -5,6 +5,7 @@ from torchvision.ops import roi_pool,RoIPool
 from typing import List,Dict,Tuple
 from .fastRCNN import FastRCNNHead
 from .rpn import RPNHead
+from collections import OrderedDict
 
 class FasterRCNN(nn.Module):
     def __init__(self, backbone:nn.Module, num_classes:int):
@@ -13,15 +14,19 @@ class FasterRCNN(nn.Module):
         self.rpn = RPNHead(backbone.output_channels)
         self.head = FastRCNNHead(backbone.output_channels, num_classes)
 
-    def forward(self, images:List[torch.Tensor], targets:List[Dict[str,torch.Tensor]]=None):
-        img_dims = [img.shape[-2:] for img in images]
+    def forward(self, batch:torch.Tensor, targets:List[Dict[str,torch.Tensor]]=None):
+        img_dims = batch.shape[-2:]
 
-        fmaps = [self.backbone(img) for img in images]
+        fmaps = self.backbone(batch)
+
 
         batched_rois = self.rpn(fmaps, img_dims, targets=targets)
 
         if targets is not None:
             batched_rois,rpn_losses = batched_rois
+
+        fmaps = OrderedDict([('0',fmaps)])
+        img_dims = [img_dims]
 
         batched_dets = self.head(fmaps,[rois[:,:4] for rois in batched_rois], img_dims, targets=targets)
 
@@ -37,7 +42,7 @@ class FasterRCNN(nn.Module):
 
         return batched_dets
 
-    def training_step(self, batch:List[torch.Tensor], targets:List[Dict[str,torch.Tensor]]):
+    def training_step(self, batch:torch.Tensor, targets:List[Dict[str,torch.Tensor]]):
         batched_rois,batched_dets,losses = self.forward(batch, targets=targets)
 
         joint_loss = losses['rpn_cls_loss'] + losses['rpn_reg_loss'] +\
@@ -49,7 +54,7 @@ class FasterRCNN(nn.Module):
         return losses
 
     @torch.no_grad()
-    def validation_step(self, batch:List[torch.Tensor], targets:List[Dict[str,torch.Tensor]]):
+    def validation_step(self, batch:torch.Tensor, targets:List[Dict[str,torch.Tensor]]):
         batched_rois,batched_dets,losses = self.forward(batch, targets=targets)
 
         det_targets = []

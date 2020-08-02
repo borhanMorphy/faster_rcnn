@@ -3,78 +3,49 @@ import torch.nn.functional as F
 from typing import Dict,List
 from .randomflip import RandomHorizontalFlip
 import torchvision.transforms as T
+from .padding import Padding
+from .interpolate import Interpolate
+from typing import Tuple
 
 class TrainTransforms():
-    def __init__(self, small_dim_size:int=600):
-        self.small_dim_size = small_dim_size
+    def __init__(self, img_dims:Tuple=(640,800)):
         self.hflip = RandomHorizontalFlip(0.5)
         self.to_tensor = T.ToTensor()
+        self.interpolate = Interpolate(img_dims)
+        self.padding = Padding(img_dims)
 
-    def __call__(self, img, targets:Dict=None):
-        if targets is not None:
-            if 'boxes' in targets:
-                targets['boxes'] = torch.from_numpy(targets['boxes']).float() # to float32
-            if 'labels' in targets:
-                targets['labels'] = torch.from_numpy(targets['labels']).long() # to int64
-
-            if 'img_dims' in targets:
-                targets['img_dims'] = torch.from_numpy(targets['img_dims']).long() # to int64
+    def __call__(self, img, targets:Dict):
+        if 'boxes' in targets:
+            targets['boxes'] = torch.from_numpy(targets['boxes']).float() # to float32
+        if 'labels' in targets:
+            targets['labels'] = torch.from_numpy(targets['labels']).long() # to int64
 
         img,targets = self.hflip(img,targets)
         data = self.to_tensor(img)
-
-        # c,h,w => 1,c,h,w
         data.unsqueeze_(0)
-        h = data.size(2)
-        w = data.size(3)
-        scale_factor = self.small_dim_size / min(h,w)
-        data = F.interpolate(data, scale_factor=scale_factor, mode='bilinear', align_corners=False, recompute_scale_factor=False)
-        if targets is None:
-            return data
 
-        if 'boxes' in targets:
-            targets['boxes'] = targets['boxes'] * scale_factor
-
-        if 'labels' in targets:
-            targets['labels'] = targets['labels']
-
-        if 'img_dims' in targets:
-            targets['img_dims'] = (targets['img_dims'] * scale_factor).long()
+        data,targets = self.interpolate(data, targets=targets)
+        data,targets = self.padding(data, targets=targets)
 
         return data,targets
 
 class TestTransforms():
-    def __init__(self, small_dim_size:int=600):
-        self.small_dim_size = small_dim_size
+    def __init__(self, img_dims:Tuple=(640,800)):
         self.to_tensor = T.ToTensor()
+        self.interpolate = Interpolate(img_dims)
+        self.padding = Padding(img_dims)
 
-    def __call__(self, img, targets:Dict=None):
-        if targets is not None:
-            if 'boxes' in targets:
-                targets['boxes'] = torch.from_numpy(targets['boxes']).float() # to float32
-            if 'labels' in targets:
-                targets['labels'] = torch.from_numpy(targets['labels']).long() # to int64
-            if 'img_dims' in targets:
-                targets['img_dims'] = torch.from_numpy(targets['img_dims']).long()
+    def __call__(self, img, targets:Dict):
+        if 'boxes' in targets:
+            targets['boxes'] = torch.from_numpy(targets['boxes']).float() # to float32
+        if 'labels' in targets:
+            targets['labels'] = torch.from_numpy(targets['labels']).long() # to int64
 
         data = self.to_tensor(img)
 
         # c,h,w => 1,c,h,w
         data.unsqueeze_(0)
-        h = data.size(2)
-        w = data.size(3)
-        scale_factor = self.small_dim_size / min(h,w)
-        data = F.interpolate(data, scale_factor=scale_factor, mode='bilinear', align_corners=False, recompute_scale_factor=False)
-        if targets is None:
-            return data
-
-        if 'boxes' in targets:
-            targets['boxes'] = targets['boxes'] * scale_factor
-
-        if 'labels' in targets:
-            targets['labels'] = targets['labels']
-
-        if 'img_dims' in targets:
-            targets['img_dims'] = (targets['img_dims'] * scale_factor).long()
+        data,targets = self.interpolate(data, targets=targets)
+        data,targets = self.padding(data, targets=targets)
 
         return data,targets

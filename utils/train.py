@@ -5,12 +5,13 @@ from cv2 import cv2
 from torchvision.ops import boxes as box_ops
 from utils import boxes2offsets
 
-def build_targets(batched_anchors:List[torch.Tensor],
+def build_targets(batched_anchors:torch.Tensor,
         targets:List[Dict[str,torch.Tensor]],
         pos_iou_tresh:float, neg_iou_tresh:float,
         add_best_matches:bool=False) -> Tuple[torch.Tensor,torch.Tensor,torch.Tensor]:
     """
     Params:
+        batched_anchors: bs,N,4
 
     Returns:
         matches torch.Tensor: Ntotal,
