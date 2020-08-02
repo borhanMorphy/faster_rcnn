@@ -81,8 +81,8 @@ def main(args):
 
     ids,labels,label_mapper = parse_data(args.root_path)
 
-    train_transforms = TrainTransforms((512,512))
-    val_transforms = TestTransforms((512,512))
+    train_transforms = TrainTransforms((1024,1024))
+    val_transforms = TestTransforms((1024,1024))
     batch_size = args.batch_size
     epochs = args.epochs
 
