@@ -17,7 +17,7 @@ class FasterRCNN(nn.Module):
         self.backbone = backbone
         self.rpn = RPNHead(backbone.output_channels)
 
-        if num_classes > 2:
+        if num_classes > 1:
             self.head = FastRCNNMultiHead(backbone.output_channels, num_classes,
                 roi_output_size=output_size, hidden_channels=hidden_channels,
                 batch_size_per_image=batch_size_per_image, batch_positive_ratio=batch_positive_ratio,
