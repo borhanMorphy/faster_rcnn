@@ -118,6 +118,11 @@ class FastRCNNHead(nn.Module):
         current = 0
         for rois in batched_rois:
             N = rois.size(0)
+            if N == 0:
+                print("warning! found empty rois", batched_rois)
+                batched_dets.append( torch.empty(0,6, dtype=reg_deltas.dtype, device=reg_deltas.device) )
+                continue
+
             logits = cls_logits[current:current+N]
             offsets = reg_deltas[current:current+N]
             current += N
