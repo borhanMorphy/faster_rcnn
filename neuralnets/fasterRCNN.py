@@ -19,7 +19,6 @@ class FasterRCNN(nn.Module):
 
         fmaps = self.backbone(batch)
 
-
         batched_rois = self.rpn(fmaps, img_dims, targets=targets)
 
         if targets is not None:

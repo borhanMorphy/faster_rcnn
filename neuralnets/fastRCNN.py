@@ -119,7 +119,7 @@ class FastRCNNHead(nn.Module):
         for rois in batched_rois:
             N = rois.size(0)
             if N == 0:
-                print("warning! found empty rois", batched_rois)
+                print("warning! found empty rois")
                 batched_dets.append( torch.empty(0,6, dtype=reg_deltas.dtype, device=reg_deltas.device) )
                 continue
 

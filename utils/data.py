@@ -2,6 +2,7 @@ import torch
 from cv2 import cv2
 import numpy as np
 from typing import List,Dict
+import csv
 
 
 def load_data(img_path:str):
@@ -21,3 +22,22 @@ def move_to_gpu(batch:torch.Tensor, targets:List[Dict[str,torch.Tensor]]):
         targets[i]['labels'] = targets[i]['labels'].cuda()
     batch = batch.cuda()
     return batch,targets
+
+
+def read_csv(file_path:str):
+    rows = {}
+    headers = []
+    with open(file_path,"r") as csv_file:
+        csv_reader = csv.reader(csv_file, delimiter=',')
+        line_count = 0
+        for row in csv_reader:
+            if line_count == 0:
+                for i,r in enumerate(row):
+                    rows[i] = []
+                    headers.append(r)
+                line_count += 1
+            else:
+                for i,r in enumerate(row):
+                    rows[i].append(r)
+                line_count += 1
+    return rows,headers

@@ -1,10 +1,21 @@
 import torch
 from torch.utils.data import DataLoader
+import random
 
 def reduce_dataset(ds,ratio=0.1):
+    return split_dataset(ds,ratio=ratio)[0]
+
+def split_dataset(ds, ratio=0.1):
     size = int(len(ds)*ratio)
     rest = len(ds)-size
-    return torch.utils.data.random_split(ds, [size,rest])[0]
+    return torch.utils.data.random_split(ds, [size,rest])
+
+def split(data, ratio=0.1):
+    random.shuffle(data)
+
+    total = len(data)
+    cut = int(total * ratio)
+    return data[:cut],data[cut:]
 
 def custom_collate_fn(batch):
     images,targets = zip(*batch)

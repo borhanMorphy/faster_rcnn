@@ -18,15 +18,45 @@ from transforms import TrainTransforms,TestTransforms
 from utils import (
     move_to_gpu,
     generate_dl,
-    reduce_dataset
+    split_dataset,
+    read_csv,
+    split
 )
 import os
 import argparse
 import json
 
+def parse_data(root_path:str):
+    ann_path = os.path.join(root_path,'train.csv')
+    data_path = os.path.join(root_path,'train')
+    
+    mapper = {}
+
+    rows,headers = read_csv(ann_path)
+    boxes = rows[headers.index('bbox')]
+    img_ids = rows[headers.index('image_id')]
+
+    for img_id,box in zip(img_ids,boxes):
+        x,y,w,h = [float(b.strip()) for b in box[1:-1].split(',')]
+        box = [x,y,x+w,y+h]
+        if img_id not in mapper:
+            mapper[img_id] = [box]
+        else:
+            mapper[img_id].append(box)
+
+    ids = []
+    labels = []
+    label_mapper = {'__background__':0, 'wheed':1}
+    for k,v in mapper.items():
+        ids.append(os.path.join(data_path,k+'.jpg'))
+        labels.append({'boxes': v, 'labels':[1]*len(v)})
+
+    return ids,labels,label_mapper
+
 def parse_arguments():
     ap = argparse.ArgumentParser()
 
+    ap.add_argument('--root-path', '-r', type=str, required=True)
     ap.add_argument('--batch-size', '-bs', type=int, default=1)
     ap.add_argument('--learning-rate', '-lr', type=float, default=1e-3)
     ap.add_argument('--momentum', '-m', type=float, default=.9)
@@ -47,21 +77,28 @@ def load_latest_checkpoint(model):
 
 def main(args):
     print(json.dumps(vars(args),sort_keys=False,indent=4))
-    train_transforms = TrainTransforms()
-    val_transforms = TestTransforms()
+
+    ids,labels,label_mapper = parse_data(args.root_path)
+
+    train_transforms = TrainTransforms((512,512))
+    val_transforms = TestTransforms((512,512))
     batch_size = args.batch_size
     epochs = args.epochs
 
     learning_rate = args.learning_rate
     momentum = args.momentum
     weight_decay = args.weight_decay
-    num_classes = 21
+    num_classes = 2
 
-    ds_train = ds_factory("VOC_train", transforms=train_transforms, download=not os.path.isfile('./data/VOCtrainval_11-May-2012.tar'))
+    val_data,train_data = split(list(zip(ids,labels)), ratio=args.val_ratio)
+
+    val_ids,val_labels = zip(*val_data)
+    train_ids,train_labels = zip(*train_data)
+
+    ds_train = ds_factory("custom", label_mapper, train_ids, train_labels, phase='train', transforms=train_transforms)
+    ds_val = ds_factory("custom", label_mapper, val_ids, val_labels, phase='val', transforms=val_transforms)
+
     dl_train = generate_dl(ds_train, batch_size=batch_size)
-
-    ds_val = ds_factory("VOC_val", transforms=val_transforms, download=not os.path.isfile('./data/VOCtrainval_11-May-2012.tar'))
-    ds_val = reduce_dataset(ds_val, ratio=args.val_ratio)
     dl_val = generate_dl(ds_val, batch_size=batch_size)
 
     backbone = models.mobilenet_v2(pretrained=True).features
@@ -69,7 +106,7 @@ def main(args):
 
     model = FasterRCNN(backbone,num_classes)
 
-    load_latest_checkpoint(model)
+    #load_latest_checkpoint(model)
 
     model.to('cuda')
 
@@ -88,7 +125,7 @@ def main(args):
 
         # save checkpoint
         print("saving checkpoint...")
-        torch.save(model.state_dict(), f"./faster_rcnn_epoch_{epoch+1}.pth")
+        torch.save(model.state_dict(), f"./custom_model_epoch_{epoch+1}.pth")
 
 def train_loop(model, dl, batch_size:int, epoch, epochs, optimizer, verbose, max_iter_count):
     running_metrics = []
