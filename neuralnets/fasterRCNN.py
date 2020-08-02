@@ -3,16 +3,32 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.ops import roi_pool,RoIPool
 from typing import List,Dict,Tuple
-from .fastRCNN import FastRCNNHead
+from .fastRCNN import FastRCNNMultiHead,FastRCNNSingleHead
 from .rpn import RPNHead
 from collections import OrderedDict
 
 class FasterRCNN(nn.Module):
-    def __init__(self, backbone:nn.Module, num_classes:int):
+    def __init__(self, backbone:nn.Module, num_classes:int,
+            output_size:int=7, hidden_channels:int=1024,
+            batch_size_per_image:int=512, batch_positive_ratio:float=.25,
+            fg_iou_threshold:float=0.5, bg_iou_threshold:float=0.5,
+            conf_threshold:float=0.05, nms_threshold:float=0.5, keep_top_n:int=100):
         super(FasterRCNN,self).__init__()
         self.backbone = backbone
         self.rpn = RPNHead(backbone.output_channels)
-        self.head = FastRCNNHead(backbone.output_channels, num_classes)
+
+        if num_classes > 2:
+            self.head = FastRCNNMultiHead(backbone.output_channels, num_classes,
+                roi_output_size=output_size, hidden_channels=hidden_channels,
+                batch_size_per_image=batch_size_per_image, batch_positive_ratio=batch_positive_ratio,
+                fg_iou_threshold=fg_iou_threshold, bg_iou_threshold=bg_iou_threshold,
+                conf_threshold=conf_threshold, nms_threshold=nms_threshold, keep_top_n=keep_top_n)
+        else:
+            self.head = FastRCNNSingleHead(backbone.output_channels,
+                roi_output_size=output_size, hidden_channels=hidden_channels,
+                batch_size_per_image=batch_size_per_image, batch_positive_ratio=batch_positive_ratio,
+                fg_iou_threshold=fg_iou_threshold, bg_iou_threshold=bg_iou_threshold,
+                conf_threshold=conf_threshold, nms_threshold=nms_threshold, keep_top_n=keep_top_n)
 
     def forward(self, batch:torch.Tensor, targets:List[Dict[str,torch.Tensor]]=None):
         img_dims = batch.shape[-2:]

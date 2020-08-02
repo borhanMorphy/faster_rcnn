@@ -25,6 +25,7 @@ from utils import (
 import os
 import argparse
 import json
+import time
 
 def parse_data(root_path:str):
     ann_path = os.path.join(root_path,'train.csv')
@@ -80,8 +81,8 @@ def main(args):
 
     ids,labels,label_mapper = parse_data(args.root_path)
 
-    train_transforms = TrainTransforms((1024,1024))
-    val_transforms = TestTransforms((1024,1024))
+    train_transforms = TrainTransforms((512,512))
+    val_transforms = TestTransforms((512,512))
     batch_size = args.batch_size
     epochs = args.epochs
 
@@ -184,17 +185,21 @@ def validation_loop(model, dl, batch_size:int, epoch:int):
         head_predictions += dets['head']['predictions']
         head_ground_truths += dets['head']['ground_truths']
 
-    mAP = calculate_mAP(head_predictions, head_ground_truths, model.head.num_classes, iou_threshold=0.5)
-    AP = calculate_AP([pred[:,:5] for pred in head_predictions], [gt[:,:4] for gt in head_ground_truths], iou_threshold=0.5)
-
+    mAP50 = calculate_mAP(head_predictions, head_ground_truths, model.head.num_classes, iou_threshold=0.5)
+    mAP75 = calculate_mAP(head_predictions, head_ground_truths, model.head.num_classes, iou_threshold=0.75)
+    mAP90 = calculate_mAP(head_predictions, head_ground_truths, model.head.num_classes, iou_threshold=0.90)
+    mAP = (mAP50 + mAP75 + mAP90) / 3
     means = caclulate_means(all_losses)
 
     print(f"--validation results for epoch {epoch+1} --")
     print(f"RPN mean recall at iou thresholds are:")
     for iou_threshold,rpn_recall in zip(iou_thresholds.cpu().numpy(),rpn_recalls.cpu().numpy()*100):
         print(f"IoU={iou_threshold:.02f} recall={int(rpn_recall)}")
-    print(f"HEAD AP objectness score={AP.item()*100:.02f} at IoU=0.5")
-    print(f"HEAD mAP score={mAP.item()*100:.02f} at IoU=0.5")
+    print(f"HEAD mAP IoU=.5 :{mAP50.item()*100:.02f}")
+    print(f"HEAD mAP IoU=.75 :{mAP75.item()*100:.02f}")
+    print(f"HEAD mAP IoU=.90 :{mAP90.item()*100:.02f}")
+    print(f"HEAD mAP IoU=.5:.95 :{mAP.item()*100:.02f}")
+
     for k,v in means.items():
         print(f"{k}: {v:.4f}")
     print("--------------------------------------------")
