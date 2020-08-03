@@ -93,7 +93,7 @@ class DetectionLayer(nn.Module):
 
         batched_dets:List[torch.Tensor] = []
 
-        scores = torch.sigmoid(cls_logits.detach()).reshape(bs,-1)
+        scores = torch.sigmoid(cls_logits).reshape(bs,-1)
         offsets = reg_deltas.detach().reshape(bs,-1,4)
 
         # convert offsets to boxes
