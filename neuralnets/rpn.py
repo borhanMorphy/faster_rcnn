@@ -103,7 +103,7 @@ class DetectionLayer(nn.Module):
         # TODO vectorize this loop
         for i in range(bs):
             single_boxes = boxes[i]
-            single_scores = scores[i]
+            single_scores = scores[i].clamp(min=0)
             N = single_scores.size(0)
             
             # select top n
@@ -118,7 +118,7 @@ class DetectionLayer(nn.Module):
             single_scores,single_boxes = single_scores[keep], single_boxes[keep]
 
             # nms
-            single_scores[ single_scores < 0] = 0
+
             keep = box_ops.nms(single_boxes, single_scores, nms_threshold)
             single_scores,single_boxes = single_scores[keep], single_boxes[keep]
 
