@@ -118,7 +118,7 @@ class DetectionLayer(nn.Module):
             single_scores,single_boxes = single_scores[keep], single_boxes[keep]
 
             # nms
-            keep = box_ops.nms(single_boxes.cpu(), single_scores.cpu(), nms_threshold)
+            keep = box_ops.nms(single_boxes, single_scores, nms_threshold)
             single_scores,single_boxes = single_scores[keep], single_boxes[keep]
 
             # post_n
