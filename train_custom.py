@@ -19,6 +19,7 @@ from utils import (
     move_to_gpu,
     generate_dl,
     split_dataset,
+    reduce_dataset,
     read_csv,
     split
 )
@@ -58,6 +59,7 @@ def parse_arguments():
     ap = argparse.ArgumentParser()
 
     ap.add_argument('--root-path', '-r', type=str, required=True)
+    ap.add_argument('--image-dims', '-id', type=str, default='640,800') # height,width
     ap.add_argument('--batch-size', '-bs', type=int, default=1)
     ap.add_argument('--learning-rate', '-lr', type=float, default=1e-3)
     ap.add_argument('--momentum', '-m', type=float, default=.9)
@@ -79,10 +81,13 @@ def load_latest_checkpoint(model):
 def main(args):
     print(json.dumps(vars(args),sort_keys=False,indent=4))
 
+    image_dims = [int(dim) for dim in args.image_dims.split(',')]
+    assert len(image_dims) == 2
+
     ids,labels,label_mapper = parse_data(args.root_path)
 
-    train_transforms = TrainTransforms((1024,1024))
-    val_transforms = TestTransforms((1024,1024))
+    train_transforms = TrainTransforms(image_dims)
+    val_transforms = TestTransforms(image_dims)
     batch_size = args.batch_size
     epochs = args.epochs
 
@@ -207,6 +212,5 @@ def validation_loop(model, dl, batch_size:int, epoch:int):
     print("--------------------------------------------")
 
 if __name__ == "__main__":
-    torch.autograd.set_detect_anomaly(True)
     args = parse_arguments()
     main(args)
