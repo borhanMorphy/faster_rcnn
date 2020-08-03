@@ -110,7 +110,7 @@ class DetectionLayer(nn.Module):
             # select top n
             _,selected_ids = single_scores.topk( min(keep_pre_nms,N) )
             single_scores,single_boxes = single_scores[selected_ids], single_boxes[selected_ids]
-            print("single_scores 1: ",single_scores[single_scores<0],single_boxes.shape)
+            print("single_scores 1: ",single_scores[single_scores<0],single_scores.shape)
 
             # clip boxes
             print("before: ",single_boxes.shape)
@@ -119,8 +119,9 @@ class DetectionLayer(nn.Module):
 
             # remove small
             keep = box_ops.remove_small_boxes(boxes[i], 1e-3) # TODO try 1
+            print("keep: ",keep,single_scores.shape);exit(0)
             single_scores,single_boxes = single_scores[keep], single_boxes[keep]
-            print("single_scores 2: ",single_scores[single_scores<0],single_boxes.shape)
+            print("single_scores 2: ",single_scores[single_scores<0],single_scores.shape)
 
             # nms
             if (single_scores < 0).any():
