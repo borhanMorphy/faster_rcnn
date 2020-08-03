@@ -126,16 +126,16 @@ def main(args):
 
     for epoch in range(epochs):
         # start validation
-        validation_loop(model, dl_val, batch_size, epoch)
+        validation_loop(model, dl_val, batch_size, epoch, device)
 
         # start training
-        train_loop(model, dl_train, batch_size, epoch, epochs, optimizer, verbose, max_iter_count)
+        train_loop(model, dl_train, batch_size, epoch, epochs, optimizer, verbose, max_iter_count, device)
 
         # save checkpoint
         print("saving checkpoint...")
         torch.save(model.state_dict(), f"./custom_model_epoch_{epoch+1}.pth")
 
-def train_loop(model, dl, batch_size:int, epoch, epochs, optimizer, verbose, max_iter_count):
+def train_loop(model, dl, batch_size:int, epoch, epochs, optimizer, verbose, max_iter_count, , device):
     running_metrics = []
     print(f"running epoch [{epoch+1}/{epochs}]")
     model.train()
@@ -160,7 +160,7 @@ def train_loop(model, dl, batch_size:int, epoch, epochs, optimizer, verbose, max
             log += f"\titer[{iter_count}/{max_iter_count}]"
             print(log)
 
-def validation_loop(model, dl, batch_size:int, epoch:int):
+def validation_loop(model, dl, batch_size:int, epoch:int, device:str):
     # start validation
     total_val_iter = int(len(dl.dataset) / batch_size)
     model.eval()
