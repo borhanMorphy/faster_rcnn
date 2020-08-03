@@ -112,7 +112,9 @@ def main(args):
     backbone = models.mobilenet_v2(pretrained=True).features
     backbone.output_channels = 1280
 
-    model = FasterRCNN(backbone,num_classes)
+    model = FasterRCNN(backbone,num_classes,
+        rpn_test_keep_post_nms=1000, rpn_batch_size_per_image=512,
+        rpn_anchor_sizes=[64,128,256,512], rpn_fg_iou_threshold=0.65)
 
     load_latest_checkpoint(model)
 
