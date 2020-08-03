@@ -135,7 +135,7 @@ def main(args):
         print("saving checkpoint...")
         torch.save(model.state_dict(), f"./custom_model_epoch_{epoch+1}.pth")
 
-def train_loop(model, dl, batch_size:int, epoch, epochs, optimizer, verbose, max_iter_count, , device):
+def train_loop(model, dl, batch_size:int, epoch, epochs, optimizer, verbose, max_iter_count, device):
     running_metrics = []
     print(f"running epoch [{epoch+1}/{epochs}]")
     model.train()
