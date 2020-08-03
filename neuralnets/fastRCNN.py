@@ -164,10 +164,6 @@ class FastRCNNMultiHead(FastRCNNHead):
             keep = scores >= conf_threshold
             scores,preds,boxes = scores[keep],preds[keep],boxes[keep]
 
-            # remove small
-            keep = box_ops.remove_small_boxes(boxes, 1e-3) # TODO try 1
-            scores,preds,boxes = scores[keep],preds[keep],boxes[keep]
-
             # batched nms
             keep = box_ops.batched_nms(boxes, scores, preds, nms_threshold)
             scores,preds,boxes = scores[keep],preds[keep],boxes[keep]
