@@ -16,7 +16,7 @@ from utils.metrics import (
 )
 from transforms import TrainTransforms,TestTransforms
 from utils import (
-    move_to_gpu,
+    move_to_device,
     generate_dl,
     split_dataset,
     reduce_dataset,
@@ -60,6 +60,7 @@ def parse_arguments():
 
     ap.add_argument('--root-path', '-r', type=str, required=True)
     ap.add_argument('--image-dims', '-id', type=str, default='640,800') # height,width
+    ap.add_argument('--device','-d',type=str, default='cuda:0',choices=['cpu','cuda','cuda:0','cuda:1','cuda:2'])
     ap.add_argument('--batch-size', '-bs', type=int, default=1)
     ap.add_argument('--learning-rate', '-lr', type=float, default=1e-3)
     ap.add_argument('--momentum', '-m', type=float, default=.9)
@@ -90,6 +91,7 @@ def main(args):
     val_transforms = TestTransforms(image_dims)
     batch_size = args.batch_size
     epochs = args.epochs
+    device = args.device
 
     learning_rate = args.learning_rate
     momentum = args.momentum
@@ -114,7 +116,7 @@ def main(args):
 
     load_latest_checkpoint(model)
 
-    model.to('cuda')
+    model.to(device)
 
     verbose = int(args.verbose/batch_size)
     optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate,
@@ -138,7 +140,7 @@ def train_loop(model, dl, batch_size:int, epoch, epochs, optimizer, verbose, max
     print(f"running epoch [{epoch+1}/{epochs}]")
     model.train()
     for iter_count,(batch,targets) in enumerate(dl):
-        batch,targets = move_to_gpu(batch,targets)
+        batch,targets = move_to_device(batch,targets,device=device)
 
         optimizer.zero_grad()
         metrics = model.training_step(batch, targets)
@@ -166,7 +168,7 @@ def validation_loop(model, dl, batch_size:int, epoch:int):
     all_detections = []
     all_losses = []
     for batch,targets in tqdm(dl, total=total_val_iter):
-        batch,targets = move_to_gpu(batch,targets)
+        batch,targets = move_to_device(batch,targets,device=device)
 
         detections,losses = model.validation_step(batch, targets)
         
