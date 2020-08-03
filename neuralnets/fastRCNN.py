@@ -169,7 +169,7 @@ class FastRCNNMultiHead(FastRCNNHead):
             scores,preds,boxes = scores[keep],preds[keep],boxes[keep]
 
             # batched nms
-            keep = box_ops.batched_nms(boxes, scores, preds, nms_threshold)
+            keep = box_ops.batched_nms(boxes.cpu(), scores.cpu(), preds.cpu(), nms_threshold)
             scores,preds,boxes = scores[keep],preds[keep],boxes[keep]
 
             # select top n
@@ -273,7 +273,7 @@ class FastRCNNSingleHead(FastRCNNHead):
             scores,preds,boxes = scores[keep],preds[keep],boxes[keep]
 
             # batched nms
-            keep = box_ops.batched_nms(boxes, scores, preds, nms_threshold)
+            keep = box_ops.batched_nms(boxes.cpu(), scores.cpu(), preds.cpu(), nms_threshold)
             scores,preds,boxes = scores[keep],preds[keep],boxes[keep]
 
             # select top n
